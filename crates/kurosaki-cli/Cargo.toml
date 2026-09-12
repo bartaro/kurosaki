@@ -1,0 +1,18 @@
+[package]
+name = "kurosaki-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "kurosaki"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+kurosaki-core.workspace = true

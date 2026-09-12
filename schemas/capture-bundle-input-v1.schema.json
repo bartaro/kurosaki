@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kurosaki.capture_bundle_input.v1",
+  "title": "KUROSAKI capture bundle controller input provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "capture_id",
+    "rom_sha256",
+    "start_frame",
+    "end_frame",
+    "start_cpu_cycle",
+    "end_cpu_cycle",
+    "start_snapshot_sha256",
+    "end_snapshot_sha256",
+    "trace_sha256",
+    "expected_final_state_hash",
+    "replay"
+  ],
+  "properties": {
+    "schema": { "const": "kurosaki.capture_bundle_input.v1" },
+    "capture_id": { "type": "string", "minLength": 1 },
+    "rom_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "start_frame": { "type": "integer", "minimum": 0 },
+    "end_frame": { "type": "integer", "minimum": 1 },
+    "start_cpu_cycle": { "type": "integer", "minimum": 0 },
+    "end_cpu_cycle": { "type": "integer", "minimum": 1 },
+    "start_snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "end_snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "trace_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "expected_final_state_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "replay": { "$ref": "#/$defs/artifact" }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "byte_length", "sha256"],
+      "properties": {
+        "path": { "const": "controller.krp.json" },
+        "byte_length": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/kurosaki-core",
+    "crates/kurosaki-cli",
+    "crates/kurosaki-py",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["KUROSAKI contributors"]
+repository = ""
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "1.0"
+pyo3 = { version = "0.22", features = ["extension-module"] }
+zip = "0.6"
+kurosaki-core = { path = "crates/kurosaki-core" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
