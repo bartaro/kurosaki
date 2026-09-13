@@ -40,23 +40,3 @@ distribution. Preserve it when redistributing these glyphs or conversions.
 This permission concerns the supplied sample glyphs. It does not grant
 rights in other fonts supplied by users, loaded from ROMs, or present in
 screenshots or analysis inputs and outputs.
-
-The PLITA UI font assets used by this software have separate licenses:
-
-- Roboto (Roboto[wdth,wght].ttf): Copyright 2011 The Roboto Project Authors
-  (https://github.com/googlefonts/roboto-classic).
-- Roboto Mono (RobotoMono-Regular.ttf): Copyright 2015 The Roboto Mono
-  Project Authors (https://github.com/googlefonts/robotomono).
-
-Both remain under the SIL Open Font License, Version 1.1 (OFL-1.1).
-Full copyright and license texts are provided in this distribution at
-licenses/fonts/Roboto-OFL.txt and licenses/fonts/RobotoMono-OFL.txt.
-When packaging these fonts with the application, include those texts.
-The project's MIT license does not relicense the font assets.
-
-Fonts loaded from the operating system or selected by a user retain their
-own terms. A runtime font path is not permission to redistribute that font.
-
-These notices identify font rights separately from the project code.
-They do not replace third-party licenses or add restrictions to code
-covered by the MIT License above.

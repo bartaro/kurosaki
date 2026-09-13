@@ -44,8 +44,16 @@ A current stable Rust toolchain. On Windows, install Visual Studio Build Tools w
 - [Offline manual source](https://github.com/bartaro/kitaq-docs)
 - [License](LICENSE) / [日本語参考訳](LICENSE.ja)
 
-The project license does not replace third-party font, dependency, logo or trademark terms. Preserve the accompanying notices when redistributing.
+The project license does not replace third-party dependency, logo or trademark terms. Preserve the accompanying notices when redistributing.
 
 ## Public package scope
 
 This publication contains the emulator core, CLI and integration APIs. GUI frontends and the PLITA dependency are deferred and are not included in this repository snapshot.
+
+## GUI development policy
+
+KOKURA-GUI and KUROSAKI-GUI remain unpublished. Future GUI work uses PLITA;
+SDL-GUI and egui-GUI are not planned for these projects. This repository
+continues to distribute the core, CLI and integration APIs.
+
+GUIは未公開です。GUI開発にはPLITAを使用し、SDL-GUIとegui-GUIは使用しません。

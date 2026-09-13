@@ -3,7 +3,7 @@
 The independent project code is licensed by DAISUKE OBA under the root MIT
 license. Dependencies retain their own authors, copyrights and terms. Keep
 this file, `LICENSE`, `LICENSE.ja`, and the `licenses/` directory with the EXE
-when redistributing. GUI code and fonts are not linked into this CLI build.
+when redistributing. 
 
 This is a conservative registry normal/build dependency inventory, including
 code-generation dependencies. Full unmodified license and NOTICE files,

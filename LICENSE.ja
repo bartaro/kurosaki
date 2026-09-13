@@ -44,26 +44,3 @@ samples/font.chr を含む形式変換物です。
 この許諾の対象は、付属するサンプル字形です。利用者が提供する別のフォント、
 ROMから読み込むフォント、スクリーンショットや解析の入力・出力に含まれる
 別のフォントについて、権利を許諾するものではありません。
-
-本ソフトウェアが使用するPLITA UIのフォント素材には、個別のライセンスがあります。
-
-- Roboto（Roboto[wdth,wght].ttf）:
-  Copyright 2011 The Roboto Project Authors
-  https://github.com/googlefonts/roboto-classic
-- Roboto Mono（RobotoMono-Regular.ttf）:
-  Copyright 2015 The Roboto Mono Project Authors
-  https://github.com/googlefonts/robotomono
-
-どちらもSIL Open Font License, Version 1.1（OFL-1.1）が引き続き適用されます。
-著作権表示とライセンス全文は、この配布物の licenses/fonts/Roboto-OFL.txt と
-licenses/fonts/RobotoMono-OFL.txt にあります。アプリケーションにこれらの
-フォントを同梱する際は、その本文も含めてください。プロジェクトのMITライセンスは、
-これらのフォント素材のライセンスを変更するものではありません。
-
-OSから読み込むフォントや利用者が選択するフォントには、それぞれの条件が
-引き続き適用されます。実行時にフォントのパスを参照することは、そのフォントの
-再配布許諾を意味しません。
-
-これらの注記は、フォントの権利とプロジェクトのコードの権利を区別するものです。
-第三者のライセンスを置き換えたり、上記のMITライセンスが適用されるコードに
-追加の制限を課したりするものではありません。
