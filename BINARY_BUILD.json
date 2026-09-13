@@ -1,0 +1,189 @@
+{
+  "built_on": "2026-09-13",
+  "licensor": "DAISUKE OBA",
+  "source_revision_before_packaging": "7c7a003146c9cd6dc6b5f3768e59579976242eaa",
+  "target": "x86_64-pc-windows-msvc",
+  "configuration": "Release",
+  "rustflags": "-C target-feature=+crt-static",
+  "build_command": ".\\scripts\\build.ps1 -Offline",
+  "cargo_lock_sha256": "0b7e6dda22f25056a6290817f357681c50d8e97d7fdfe726209214221f629fbb",
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8",
+  "binary": {
+    "path": "kurosaki.exe",
+    "bytes": 2511360,
+    "sha256": "f7a090976d51edb1c5533f26407f252455b90324f59ff46d45574473f653d3df",
+    "imported_system_dlls": [
+      "api-ms-win-core-synch-l1-2-0.dll",
+      "kernel32.dll",
+      "ntdll.dll"
+    ]
+  },
+  "source_inputs": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "0b7e6dda22f25056a6290817f357681c50d8e97d7fdfe726209214221f629fbb"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "3bdaa5b0488561b7d36a44be7340dafd8148ca8b6315e23a197a3f50bf21d061"
+    },
+    {
+      "path": "crates/kurosaki-cli/Cargo.toml",
+      "sha256": "57118b9b015ef3977569595f020db3da228f5ddfd04b7af5ae6e9a38fde9f130"
+    },
+    {
+      "path": "crates/kurosaki-cli/src/main.rs",
+      "sha256": "0605edee69cfd580f2573ffdc3b1c139d61eef45566c78c1968c8e86a121f42c"
+    },
+    {
+      "path": "crates/kurosaki-cli/tests/battery_cli.rs",
+      "sha256": "d3b1628de64bd59f4dce75f6deb72c5b033e6fc901e24ae0fa862dfeb8a49f2f"
+    },
+    {
+      "path": "crates/kurosaki-core/Cargo.toml",
+      "sha256": "4e81ad2e59c59bea0a862655f1da43610c56dbd9d0f1e14c455ccc8045f06fd6"
+    },
+    {
+      "path": "crates/kurosaki-core/src/apu.rs",
+      "sha256": "dc09aa98422944c5b816fc3d9903fca7af0d88a10dac53a771d368e934f84ba0"
+    },
+    {
+      "path": "crates/kurosaki-core/src/battery.rs",
+      "sha256": "562997b9b4abb392da24c4e81171585905d2058ccb768cd9763a5fdaab589f47"
+    },
+    {
+      "path": "crates/kurosaki-core/src/battery/tests.rs",
+      "sha256": "e3eb784cab16448ebaa5d1642212bc312de8536634ff39a34b93dd6e755ee76a"
+    },
+    {
+      "path": "crates/kurosaki-core/src/board_audit.rs",
+      "sha256": "2c21190b3e91e3d356f0045a80188374b2a906cd7e8ffb99e2ad247fdfedd463"
+    },
+    {
+      "path": "crates/kurosaki-core/src/bus.rs",
+      "sha256": "5fe338863b2986ca48d03ba3e49bae71047d89b1698bd7eccc89c96db3f2209c"
+    },
+    {
+      "path": "crates/kurosaki-core/src/cart.rs",
+      "sha256": "b5dfe6cfca33e50625c00546d9f1d2b8bcc7e9273202dbb797a0baba0ae4cc24"
+    },
+    {
+      "path": "crates/kurosaki-core/src/cpu.rs",
+      "sha256": "6ebedd3f75381859d9f4cb9cf87bc0629bd9e2a57dc928fa1e95431dcc6644f0"
+    },
+    {
+      "path": "crates/kurosaki-core/src/decompile.rs",
+      "sha256": "0f922d5492f72d87ecbb38b5de6ba17def59c39e03e3ed6b03fbc4674d16892b"
+    },
+    {
+      "path": "crates/kurosaki-core/src/diagnostic_events.rs",
+      "sha256": "73a6c950ebb9899946f32d204ee7dbc6a403b2abf0438d8cc04de9c2336a5dc3"
+    },
+    {
+      "path": "crates/kurosaki-core/src/diagnostics.rs",
+      "sha256": "e66c6fcab7db606896fc71a98e18bfd7c0dd46d7856db9866ee903bdd60e1319"
+    },
+    {
+      "path": "crates/kurosaki-core/src/disasm.rs",
+      "sha256": "f8c1f52bb7043c13c9be8633f283fe5541a9d7b56daef80e5210e2c79321fcea"
+    },
+    {
+      "path": "crates/kurosaki-core/src/emulator.rs",
+      "sha256": "bc269ea8abdd67fc43be5a37882594b61254e8328c6fc080a664b9590f1feba9"
+    },
+    {
+      "path": "crates/kurosaki-core/src/error.rs",
+      "sha256": "428f8e358c0af9fa848acae46847256318c658ca92ecf8fff6f6e69070af873c"
+    },
+    {
+      "path": "crates/kurosaki-core/src/fds.rs",
+      "sha256": "6868dbf57f0b5e38dc2446228cb4c6eda00d292797d7d23bed84e84ba3d5f60f"
+    },
+    {
+      "path": "crates/kurosaki-core/src/hash.rs",
+      "sha256": "22de1f60e50b2d29abcff2b04d676fe816758bdf6ae5b54453dfdc2d674ef47b"
+    },
+    {
+      "path": "crates/kurosaki-core/src/kitaqfc.rs",
+      "sha256": "946132f91d7b90c4793793c4d2313a58a1f1caf54009bef25f41f449769c66bb"
+    },
+    {
+      "path": "crates/kurosaki-core/src/lib.rs",
+      "sha256": "87e5d9b220ecbd445591c86ce425a5c63ce7bb1aa4de031aef44bbddd423010a"
+    },
+    {
+      "path": "crates/kurosaki-core/src/mapper.rs",
+      "sha256": "4fa48c97b95469c29220149a4d73355e49347d070a96f3b3bd12556183177935"
+    },
+    {
+      "path": "crates/kurosaki-core/src/mapper_db.rs",
+      "sha256": "78f00c6e49dbd834ae9849f46c4ea63a0aa9d2801e4358a1a287b320bc386bfd"
+    },
+    {
+      "path": "crates/kurosaki-core/src/mapper_scaffolds.rs",
+      "sha256": "a5ecedb46a73cef4fda6acc2a312b9061eb07c8268d7847e209b66416548829b"
+    },
+    {
+      "path": "crates/kurosaki-core/src/ppu.rs",
+      "sha256": "3ee266d83bac4634a5527737cf0033fae3f19d518f955b17d4e3132a95bb5675"
+    },
+    {
+      "path": "crates/kurosaki-core/src/replay.rs",
+      "sha256": "7f235e7fb76e8eb4835986d6e2c77f3c646872fc305bf5c49edc145bf7c85ce2"
+    },
+    {
+      "path": "crates/kurosaki-core/src/report.rs",
+      "sha256": "d0d74fb82a41a2682f841cf17a189bbbfe59b6723d45faa99f56b7d0cb128173"
+    },
+    {
+      "path": "crates/kurosaki-core/src/screen.rs",
+      "sha256": "5de7f634141b6d6d730733ea398e738435f415d0e78dc1ffac921105a0f70b9c"
+    },
+    {
+      "path": "crates/kurosaki-core/src/snapshot.rs",
+      "sha256": "940b6aa62d84b773969caf8968f38bf9079db44383484a2402b6ba0ed95d2135"
+    },
+    {
+      "path": "crates/kurosaki-core/src/snapshot_rebase.rs",
+      "sha256": "7d3e72b8b7ae89e4f86e4463a6b7e0b72cea8b7fdc37bd880285e245acbbed16"
+    },
+    {
+      "path": "crates/kurosaki-core/src/trace.rs",
+      "sha256": "99ff2912b36d31d1ff8ff665497872a62da996db698c41c86c9cd6f5ca1e7b10"
+    },
+    {
+      "path": "crates/kurosaki-core/tests/smoke.rs",
+      "sha256": "c4d0bb7180b9cab4e2cc352e4056c06641ffcff0412c552a682e9701c8197842"
+    },
+    {
+      "path": "crates/kurosaki-core/tests/snapshot_rebase.rs",
+      "sha256": "558df159ad3388f1f9dfb026ff5e8ce27024e883054a94a753e938bc7a02f883"
+    },
+    {
+      "path": "crates/kurosaki-core/tests/surom512.rs",
+      "sha256": "e27482eb48e112cc0c12d668565cfe0cf73b93218b4257e349000133f049f65f"
+    },
+    {
+      "path": "crates/kurosaki-py/Cargo.toml",
+      "sha256": "6d54a5b8ac07db795f4dec29b61395d10ef9303f657d7f8910dfff4d83f1a60c"
+    },
+    {
+      "path": "crates/kurosaki-py/src/lib.rs",
+      "sha256": "637bc32c7e6478e6b312fb4a65f744b6a37369d184ef86b84473d715fc61f484"
+    }
+  ],
+  "checks": [
+    {
+      "check": "--help",
+      "exit_code": 0
+    },
+    {
+      "check": "fc_hello execution and screenshot",
+      "frames": 120,
+      "rom_sha256": "a6ed6e0653bb6b44a40ac89b76662feb96e7ce6ded699b81eca2a3c941372822",
+      "pixel_comparison": "exact match to published manual reference",
+      "png_sha256": "2328776c7109c3aee607fab4abb6b97166912cb0565e2edb47238eacd0a798c8"
+    }
+  ],
+  "scope": "CLI-only distribution. GUI, C API DLL and Python extension binaries are excluded. These focused executable checks do not repeat all historical workspace tests or establish physical-hardware compatibility."
+}

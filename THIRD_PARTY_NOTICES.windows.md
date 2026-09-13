@@ -1,5 +1,7 @@
 # Dependency license inventory (Windows, published CLI/API workspace)
 
+For the distributed Windows CLI executable, see [BINARY_NOTICES.md](BINARY_NOTICES.md) and the full notice texts in `licenses/binary-dependencies/` and `licenses/rust-standard-library/`. Existing inventories describe broader or historical source-workspace scopes.
+
 Scope: the published workspace default features on x86_64-pc-windows-msvc, including build and development dependencies. GUI frontends and PLITA are excluded. This is not a per-executable link map or a replacement for applicable license texts.
 
 Third-party dependency terms remain separate from the project MIT license. Cargo resolves these dependencies from their own packages; no dependency source is vendored by this inventory.

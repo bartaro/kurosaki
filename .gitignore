@@ -21,3 +21,6 @@
 *.wav
 .kitaqgb_cache/
 .kitaqfc_cache/
+
+# Published Windows CLI executable
+!/kurosaki.exe
