@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+// Diagnostic importance, serialized as lowercase info/warn/error values.
 pub enum Severity {
     Info,
     Warn,
@@ -11,6 +12,8 @@ pub enum Severity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// A report item with optional source and execution coordinates. These labels
+// are supplied by producers, not verified by this data structure.
 pub struct Diagnostic {
     pub code: String,
     pub severity: Severity,
@@ -24,6 +27,8 @@ pub struct Diagnostic {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Stored diagnostics and cached severity totals. Mutating public items directly
+// can make totals inconsistent; push maintains them for normal additions.
 pub struct DiagnosticReport {
     pub format: String,
     pub rom_sha256: String,
@@ -35,6 +40,8 @@ pub struct DiagnosticReport {
 }
 
 impl DiagnosticReport {
+    // Create an empty v3 report with the ROM fingerprint and crate version.
+    // Severity totals start at zero and are maintained by push.
     pub fn new(rom_sha256: impl Into<String>) -> Self {
         Self {
             format: "kurosaki-diagnostics-v3".to_string(),
@@ -47,6 +54,8 @@ impl DiagnosticReport {
         }
     }
 
+    // Increment the matching severity total and append the diagnostic as supplied.
+    // There is no deduplication or validation of its source/timing fields.
     pub fn push(&mut self, item: Diagnostic) {
         match item.severity {
             Severity::Error => self.errors += 1,
@@ -56,6 +65,7 @@ impl DiagnosticReport {
         self.items.push(item);
     }
 
+    // Append an informational diagnostic without location or recommendation data.
     pub fn info(&mut self, code: &str, title: impl Into<String>, message: impl Into<String>) {
         self.push(Diagnostic {
             code: code.to_string(),
@@ -70,6 +80,8 @@ impl DiagnosticReport {
         });
     }
 
+    // Append a warning with an optional recommendation, leaving source and timing
+    // fields unset. Use push directly for a diagnostic with those fields populated.
     pub fn warn(
         &mut self,
         code: &str,
@@ -90,6 +102,9 @@ impl DiagnosticReport {
         });
     }
 
+    // Build initial diagnostics from the mapper registry, cartridge flags and
+    // header warnings. These observations describe metadata and declared support,
+    // not results of executing the ROM or proving mapper accuracy.
     pub fn from_rom_info(info: &RomInfo) -> Self {
         let mut report = Self::new(info.sha256.clone());
         let spec = mapper_spec(info.mapper);

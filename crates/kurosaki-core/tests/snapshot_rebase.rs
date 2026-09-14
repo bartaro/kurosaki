@@ -10,6 +10,8 @@ const SOURCE_BANKS: usize = 16;
 const TARGET_BANKS: usize = 32;
 const CHANGE_OFFSET: usize = 0x2345;
 
+// Generate mapper-1 battery-ROM bytes filled by physical bank number.
+// These are state-transfer fixtures, not executable gameplay programs.
 fn make_rom(bank_count: usize) -> Vec<u8> {
     let mut rom = vec![0u8; 16 + bank_count * BANK_SIZE];
     rom[0..4].copy_from_slice(b"NES\x1A");
@@ -23,6 +25,9 @@ fn make_rom(bank_count: usize) -> Vec<u8> {
     rom
 }
 
+// Grow synthetic PRG from 256 to 512 KiB, alter one three-byte range and
+// copy bank 15 into bank 31 as the target common replica. Preserve every
+// other byte of the overlapping source payload.
 fn source_and_target() -> (Vec<u8>, Vec<u8>) {
     let source = make_rom(SOURCE_BANKS);
     let mut target = make_rom(TARGET_BANKS);
@@ -34,6 +39,9 @@ fn source_and_target() -> (Vec<u8>, Vec<u8>) {
     (source, target)
 }
 
+// Seed frame/instruction counters, selected CPU/RAM values and mapper RAM
+// directly, then return both the snapshot object and the exact serialized
+// bytes used for its contract digest. No frames are executed.
 fn source_snapshot(source_rom: &[u8]) -> (Snapshot, Vec<u8>) {
     let cart = Cartridge::from_bytes(source_rom).expect("source fixture parses");
     let mut emulator = Emulator::from_cartridge(cart).expect("source emulator initializes");
@@ -52,6 +60,8 @@ fn source_snapshot(source_rom: &[u8]) -> (Snapshot, Vec<u8>) {
     (snapshot, bytes)
 }
 
+// Bind the fixture identities, one three-byte PRG range, the complete
+// appended suffix and one $7080 PRG-RAM patch. Start with no CPU-RAM patches.
 fn contract(
     source: &Cartridge,
     target: &Cartridge,
@@ -88,6 +98,9 @@ fn contract(
 }
 
 #[test]
+// First reject ordinary restoration against the changed ROM, then rebase
+// and verify selected counters/registers/RAM, target SUROM configuration,
+// patch bytes and strict target restoration. This does not run the modified ROM.
 fn explicit_rebase_moves_mutable_mmc1_state_and_retains_target_board() {
     let (source_rom, target_rom) = source_and_target();
     let source_cart = Cartridge::from_bytes(&source_rom).expect("source fixture parses");
@@ -128,6 +141,8 @@ fn explicit_rebase_moves_mutable_mmc1_state_and_retains_target_board() {
     assert_eq!(rebased.cpu.a, 0x5A);
     assert_eq!(rebased.bus.ram[0x321], 0xA5);
     assert_eq!(rebased.mapper_private[7], 1, "target SUROM configuration");
+    // The fixture assertion uses the current MMC1 private-state layout: a
+    // 21-byte prefix precedes PRG RAM. Update this offset if that format changes.
     let patch_start = 21 + usize::from(0x7080u16 - 0x6000);
     assert_eq!(
         &rebased.mapper_private[patch_start..patch_start + patch.len()],
@@ -139,6 +154,8 @@ fn explicit_rebase_moves_mutable_mmc1_state_and_retains_target_board() {
 }
 
 #[test]
+// Bind the updated target fingerprint but leave one extra PRG byte outside
+// the allowed range; require the specific allowlist rejection.
 fn rebase_rejects_unallowlisted_prg_difference() {
     let (source_rom, mut target_rom) = source_and_target();
     target_rom[16 + 0x3456] ^= 0x80;
@@ -165,6 +182,8 @@ fn rebase_rejects_unallowlisted_prg_difference() {
 }
 
 #[test]
+// Independently corrupt supplied patch bytes and the snapshot-file digest
+// while retaining the original contract; require both calls to fail.
 fn rebase_rejects_snapshot_or_patch_hash_drift() {
     let (source_rom, target_rom) = source_and_target();
     let source_cart = Cartridge::from_bytes(&source_rom).expect("source fixture parses");
@@ -205,6 +224,9 @@ fn rebase_rejects_snapshot_or_patch_hash_drift() {
 }
 
 #[test]
+// Apply a valid two-byte physical CPU-RAM patch and check output bytes,
+// report counts and strict restoration. This case covers the accepted path;
+// it does not exercise mirrored, overlapping or out-of-range patch rejection.
 fn rebase_applies_only_contract_bound_physical_cpu_ram_patches() {
     let (source_rom, target_rom) = source_and_target();
     let source_cart = Cartridge::from_bytes(&source_rom).expect("source fixture parses");

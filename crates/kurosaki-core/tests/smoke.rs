@@ -1,6 +1,8 @@
 use kurosaki_core::{Cartridge, Emulator, RunOptions};
 
 #[test]
+// Check header-derived mirroring policies and the repeated physical 8 KiB
+// bank labels of a 16 KiB NROM image, including an address outside PRG ROM.
 fn nrom_exposes_header_nametable_mirroring_to_the_ppu() {
     use kurosaki_core::cart::Mirroring;
     use kurosaki_core::mapper::{Mapper, NametableMirroring, NromMapper};
@@ -21,6 +23,8 @@ fn nrom_exposes_header_nametable_mirroring_to_the_ppu() {
 }
 
 #[test]
+// Run the original DMA loop for two frames with unsupported opcodes fatal;
+// require continued execution and the OAM-DMA diagnostic.
 fn synthetic_nrom_dma_smoke_runs_without_unimplemented_official_opcode_failures() {
     // Original synthetic 6502 program: SEI; LDA #2; STA $4014; JMP $8006.
     // Generated in memory so this test needs no externally supplied ROM file.
@@ -53,6 +57,8 @@ fn synthetic_nrom_dma_smoke_runs_without_unimplemented_official_opcode_failures(
 }
 
 #[test]
+// Require a supported mnemonic for every listed official opcode. This
+// checks the naming table; instruction behavior is exercised separately.
 fn official_2a03_opcodes_are_named_as_supported() {
     let official: &[u8] = &[
         0x00, 0x01, 0x05, 0x06, 0x08, 0x09, 0x0A, 0x0D, 0x0E, 0x10, 0x11, 0x15, 0x16, 0x18, 0x19,
@@ -75,6 +81,8 @@ fn official_2a03_opcodes_are_named_as_supported() {
     }
 }
 
+// Pad a small program with NOPs in one 16 KiB NROM bank, then point all
+// three vectors to $8000. Callers supply programs that fit before the vectors.
 fn synthetic_nrom_with_program(program: &[u8]) -> Vec<u8> {
     let mut prg = vec![0xEA; 16 * 1024];
     prg[..program.len()].copy_from_slice(program);
@@ -89,6 +97,8 @@ fn synthetic_nrom_with_program(program: &[u8]) -> Vec<u8> {
 }
 
 #[test]
+// Execute LDA and STA, then compare the STA instruction and memory-write
+// events for the executing PC, physical PRG bank and store opcode.
 fn cpu_and_memory_write_trace_share_the_executing_pc_and_physical_bank() {
     let rom = synthetic_nrom_with_program(&[
         0xA9, 0x5A, // LDA #$5A at $8000
@@ -130,6 +140,8 @@ fn cpu_and_memory_write_trace_share_the_executing_pc_and_physical_bank() {
 }
 
 #[test]
+// Insert an original 512-byte trainer pattern after the header, verify
+// its mapped endpoints, and execute a load/store that copies its first byte.
 fn ines_trainer_is_preloaded_into_cpu_7000_window() {
     let mut rom = synthetic_nrom_with_program(&[
         0xAD, 0x00, 0x70, // LDA $7000
@@ -175,6 +187,8 @@ fn ines_trainer_is_preloaded_into_cpu_7000_window() {
 }
 
 #[test]
+// Snapshot trainer-initialized PRG RAM, overwrite the live byte and restore
+// a fresh emulator to check that the saved trainer byte returns.
 fn nrom_snapshot_restores_trainer_backed_prg_ram() {
     let mut rom = synthetic_nrom_with_program(&[0x4C, 0x00, 0x80]);
     rom[6] |= 0x04;
@@ -218,6 +232,8 @@ fn nrom_snapshot_restores_trainer_backed_prg_ram() {
 }
 
 #[test]
+// Execute the non-crossing AHX fixture and check its masked RAM value,
+// next PC and unofficial-opcode mnemonic.
 fn unofficial_ahx_abs_y_stores_masked_value_without_page_crossing() {
     let rom = synthetic_nrom_with_program(&[
         0xA9, 0xF3, // LDA #$F3
@@ -239,6 +255,8 @@ fn unofficial_ahx_abs_y_stores_masked_value_without_page_crossing() {
 }
 
 #[test]
+// Exercise the modeled AHX page-cross rule: the masked high byte redirects
+// the write to $1001, which mirrors CPU RAM at $0001, leaving $0301 clear.
 fn unofficial_ahx_abs_y_uses_masked_high_byte_on_page_crossing() {
     let rom = synthetic_nrom_with_program(&[
         0xA9, 0xF0, // LDA #$F0
@@ -260,6 +278,8 @@ fn unofficial_ahx_abs_y_uses_masked_high_byte_on_page_crossing() {
 }
 
 #[test]
+// Point BRK at an RTI handler and check the stacked return address and B
+// flag, restored stack pointer, and execution after the BRK padding byte.
 fn brk_vectors_and_rti_returns_after_the_padding_byte() {
     let mut rom = synthetic_nrom_with_program(&[
         0x00, 0xEA, // BRK plus padding byte
@@ -295,6 +315,8 @@ fn brk_vectors_and_rti_returns_after_the_padding_byte() {
 }
 
 #[test]
+// Keep IRQ pending across CLI, require one intervening NOP, then observe
+// IRQ entry and RTI returning to that NOP's successor.
 fn cli_defers_a_pending_irq_for_one_instruction() {
     let mut rom = synthetic_nrom_with_program(&[
         0x58, // CLI
@@ -326,6 +348,8 @@ fn cli_defers_a_pending_irq_for_one_instruction() {
     assert!(emu.trace.events.iter().any(|event| event.kind == "cpu.irq"));
 }
 
+// Build an original NOP-padded jump loop with all vectors at $8000,
+// encoding the requested eight-bit mapper ID in the two iNES flag bytes.
 fn synthetic_rom_with_mapper(mapper: u8) -> Vec<u8> {
     let mut prg = vec![0xEA; 16 * 1024];
     prg[0] = 0x4C;
@@ -347,6 +371,8 @@ fn synthetic_rom_with_mapper(mapper: u8) -> Vec<u8> {
     rom
 }
 
+// Fill each 32 KiB PRG bank and 8 KiB CHR bank with distinct bank IDs so
+// direct mapper reads expose the selected windows without executing code.
 fn synthetic_banked_rom(mapper: u8, prg_32k_banks: usize, chr_8k_banks: usize) -> Vec<u8> {
     let mut rom = vec![
         0x4E,
@@ -375,6 +401,8 @@ fn synthetic_banked_rom(mapper: u8, prg_32k_banks: usize, chr_8k_banks: usize) -
     rom
 }
 
+// Create distinguishable 16 KiB PRG banks and a constant CHR bank for
+// lower/upper PRG-window checks; fixture sizes fit the iNES byte fields.
 fn synthetic_uxrom_rom(mapper: u8, prg_16k_banks: usize) -> Vec<u8> {
     let mut rom = vec![
         0x4E,
@@ -401,6 +429,8 @@ fn synthetic_uxrom_rom(mapper: u8, prg_16k_banks: usize) -> Vec<u8> {
     rom
 }
 
+// Mark physical 8 KiB PRG and 4 KiB CHR banks individually so both latch
+// families can be checked against their different CPU window sizes.
 fn synthetic_mmc2_mmc4_rom(mapper: u8) -> Vec<u8> {
     let mut rom = vec![
         0x4E,
@@ -430,6 +460,8 @@ fn synthetic_mmc2_mmc4_rom(mapper: u8) -> Vec<u8> {
 }
 
 #[test]
+// Write each simple mapper's combined bank register, check PRG/CHR fill
+// bytes, and restore a snapshot to recheck the selected PRG window.
 fn simple_bank_mappers_switch_prg_and_chr_windows() {
     use kurosaki_core::TraceConfig;
 
@@ -469,6 +501,8 @@ fn simple_bank_mappers_switch_prg_and_chr_windows() {
 }
 
 #[test]
+// Use mapper-specific register encodings to select lower bank three,
+// retain the final upper bank and preserve the lower selection on restore.
 fn shifted_uxrom_mappers_switch_lower_prg_window_and_restore() {
     for (mapper, write_value, expected_bank) in [(71u8, 3u8, 3u8), (94u8, 0x0Cu8, 3u8)] {
         let rom = synthetic_uxrom_rom(mapper, 8);
@@ -514,6 +548,9 @@ fn shifted_uxrom_mappers_switch_lower_prg_window_and_restore() {
 }
 
 #[test]
+// Feed the four latch-trigger addresses directly to the mapper and check
+// CHR selections, then verify each family's PRG-bank unit. PPU timing is
+// not exercised by these direct notifications.
 fn mmc2_mmc4_latches_select_chr_banks_from_ppu_fetch_addresses() {
     for mapper in [9u8, 10u8] {
         let rom = synthetic_mmc2_mmc4_rom(mapper);
@@ -583,6 +620,9 @@ fn mmc2_mmc4_latches_select_chr_banks_from_ppu_fetch_addresses() {
 }
 
 #[test]
+// Set the variant bit in CHR register zero and check mapper 118 mirroring
+// or mapper 119 writable CHR. Private-state restore is checked here only
+// for success and preservation of the variant mapper ID.
 fn mmc3_variant_118_119_execute_chr_variant_rules() {
     use kurosaki_core::mapper::NametableMirroring;
     for mapper in [118u8, 119u8] {
@@ -621,6 +661,8 @@ fn mmc3_variant_118_119_execute_chr_variant_rules() {
 }
 
 #[test]
+// Write both CHR halves, change the upper selection and overwrite it;
+// require the lower value to remain and the selected upper value to change.
 fn cprom_switches_only_the_upper_chr_ram_half() {
     let rom = synthetic_rom_with_mapper(13);
     let cart = Cartridge::from_bytes(&rom).expect("CPROM header should parse");
@@ -636,6 +678,8 @@ fn cprom_switches_only_the_upper_chr_ram_half() {
 }
 
 #[test]
+// Write the expansion-space bank register and check the selected PRG
+// and CHR bank-ID bytes.
 fn nina03_register_selects_prg_and_chr_banks_from_expansion_space() {
     let rom = synthetic_banked_rom(79, 4, 8);
     let cart = Cartridge::from_bytes(&rom).expect("NINA header should parse");
@@ -659,6 +703,8 @@ fn nina03_register_selects_prg_and_chr_banks_from_expansion_space() {
 }
 
 #[test]
+// Select mapper 180 bank three in the upper 16 KiB window while the
+// lower window continues to expose bank zero.
 fn crazy_climber_switches_the_upper_prg_window_only() {
     let rom = synthetic_uxrom_rom(180, 8);
     let cart = Cartridge::from_bytes(&rom).expect("Mapper 180 header should parse");
@@ -687,6 +733,8 @@ fn crazy_climber_switches_the_upper_prg_window_only() {
 }
 
 #[test]
+// Check selectable/fixed PRG windows, latch $FFFF through four nibble
+// writes and clock once to assert IRQ; restore the pending IRQ state.
 fn vrc3_uses_16k_prg_windows_and_latched_counter_irq() {
     let rom = synthetic_uxrom_rom(73, 8);
     let cart = Cartridge::from_bytes(&rom).expect("VRC3 header should parse");
@@ -716,6 +764,8 @@ fn vrc3_uses_16k_prg_windows_and_latched_counter_irq() {
 }
 
 #[test]
+// Parse each listed mapper header and require factory construction.
+// This covers dispatch availability, not complete mapper execution.
 fn supported_mapper_factory_accepts_phase_0_3_targets() {
     for mapper in [
         0u8, 1, 2, 3, 4, 5, 7, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 32, 33, 48, 64, 68, 69, 73,
@@ -730,6 +780,8 @@ fn supported_mapper_factory_accepts_phase_0_3_targets() {
 }
 
 #[test]
+// Require mapper-specific implementations for the listed IDs by checking
+// the debug probe-only flag after construction.
 fn complex_mapper_scaffolds_are_not_probe_only() {
     for mapper in [5u8, 16, 18, 19, 21, 24, 25, 26, 69, 85] {
         let rom = synthetic_rom_with_mapper(mapper);
@@ -746,6 +798,8 @@ fn complex_mapper_scaffolds_are_not_probe_only() {
 }
 
 #[test]
+// Construct an unsupported mapper through the inspection fallback and
+// require its probe-only diagnostic after a one-frame run request.
 fn probe_only_mapper_factory_still_accepts_unknown_mapper() {
     let rom = synthetic_rom_with_mapper(111);
     let cart = Cartridge::from_bytes(&rom).expect("synthetic mapper 111 header should parse");
@@ -773,6 +827,8 @@ fn probe_only_mapper_factory_still_accepts_unknown_mapper() {
 }
 
 #[test]
+// Enable a constant-volume pulse with length halt, clock the APU and
+// require generated nonzero samples plus an active length-status bit.
 fn audio_pipeline_generates_2a03_samples_with_length_and_envelope_state() {
     use kurosaki_core::apu::ApuState;
     use kurosaki_core::{TraceConfig, TraceSink};
@@ -792,6 +848,8 @@ fn audio_pipeline_generates_2a03_samples_with_length_and_envelope_state() {
 }
 
 #[test]
+// Program a VRC6 pulse and sum absolute expansion samples to verify
+// a nonzero contribution without requiring a reference waveform match.
 fn vrc6_mapper_audio_sample_becomes_nonzero_after_register_writes() {
     use kurosaki_core::mapper::Mapper;
     use kurosaki_core::mapper_scaffolds::VrcFamilyMapper;
@@ -811,6 +869,9 @@ fn vrc6_mapper_audio_sample_becomes_nonzero_after_register_writes() {
 }
 
 #[test]
+// Load an original ramp into writable wave RAM, set frequency/volume
+// and enable playback; require nonzero expansion samples without a BIOS
+// or disk image.
 fn fds_mapper_audio_sample_becomes_nonzero_after_wave_and_frequency_writes() {
     use kurosaki_core::mapper::{FdsMapper, Mapper};
     use kurosaki_core::{TraceConfig, TraceSink};

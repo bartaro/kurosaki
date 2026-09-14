@@ -1,7 +1,11 @@
 #include "lib/fc.h"
 
+// One byte of observable loop state for the compiler/emulator smoke fixture.
 unsigned char smoke_counter;
 
+// Enable rendering and repeatedly queue one nametable-byte update, yielding
+// to the NMI wait after each iteration. This minimal fixture exercises the
+// PPU/queue path rather than presenting a complete game scene.
 void main(void)
 {
     nes_ppu_screen_on(0x80, 0x1e);

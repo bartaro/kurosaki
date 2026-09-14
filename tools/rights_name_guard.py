@@ -7,6 +7,8 @@ import argparse
 from pathlib import Path
 
 
+# Text formats checked by the public scan. Keep this allowlist aligned with
+# the published source/manual types; other file formats are not decoded.
 TEXT_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cs", ".h", ".hpp", ".json", ".jsonl",
     ".md", ".ps1", ".py", ".rs", ".sh", ".toml", ".txt", ".xml",
@@ -19,6 +21,9 @@ EXCLUDED_DIRS = {
 }
 
 
+# Read a UTF-8 list with an optional BOM, trim entries, ignore blank/comment
+# lines and case-fold terms. Duplicate terms are retained; no regular
+# expressions or word-boundary rules are interpreted.
 def load_terms(path: Path) -> list[str]:
     terms = []
     for line in path.read_text(encoding="utf-8-sig").splitlines():
@@ -28,6 +33,9 @@ def load_terms(path: Path) -> list[str]:
     return terms
 
 
+# Walk candidate files by known text suffix or exact conventional name,
+# excluding the denylist itself and files beneath named build/cache folders.
+# This is a filesystem selection rule, not a Git publication inventory.
 def iter_text_files(root: Path, denylist: Path):
     for path in root.rglob("*"):
         if not path.is_file() or path.resolve() == denylist:
@@ -39,6 +47,9 @@ def iter_text_files(root: Path, denylist: Path):
             yield path
 
 
+# Match case-folded substrings on individual UTF-8 text lines, replacing
+# undecodable bytes. Return one path/line pair per matching line regardless
+# of how many terms occur; binary files and cross-line terms are not scanned.
 def scan(root: Path, denylist: Path) -> list[tuple[Path, int]]:
     terms = load_terms(denylist)
     matches = []
@@ -52,6 +63,9 @@ def scan(root: Path, denylist: Path) -> list[tuple[Path, int]]:
     return matches
 
 
+# Resolve CLI paths, run the text scan and report only relative filenames
+# and line numbers. Exit 1 for matches or 0 for none; read/argument failures
+# remain errors. A clean term scan is not a license or authorship audit.
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path.cwd())

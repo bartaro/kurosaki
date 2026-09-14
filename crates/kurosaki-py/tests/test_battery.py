@@ -6,6 +6,9 @@ import kurosaki
 
 
 class BatteryTests(unittest.TestCase):
+    # Create a test-owned NROM fixture that increments $6000 once per cold
+    # boot and then loops. Set all vectors to the same entry; no external ROM
+    # or saved game data is required.
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="kurosaki-battery-python-")
         self.root = Path(self.temp.name)
@@ -19,9 +22,13 @@ class BatteryTests(unittest.TestCase):
         self.rom = self.root / "synthetic.nes"
         self.rom.write_bytes(rom)
 
+    # Clean up this test instance's temporary fixture and save files.
     def tearDown(self):
         self.temp.cleanup()
 
+    # Use the Python extension to run two cold boots separated by raw save
+    # import. Check the incremented byte, complete save length, previous-byte
+    # backup and explicit reload into the original emulator.
     def test_battery_cold_boot_roundtrip_and_backup(self):
         emulator = kurosaki.Emulator.from_rom(str(self.rom))
         emulator.step_frame()
@@ -38,6 +45,8 @@ class BatteryTests(unittest.TestCase):
         emulator.load_battery_file(str(save))
         self.assertEqual(emulator.battery_ram()[0], 2)
 
+    # Reject a short sidecar during import and construction, preserving the
+    # existing emulator state hash and the input file bytes.
     def test_bad_size_does_not_change_state(self):
         emulator = kurosaki.Emulator.from_rom(str(self.rom))
         before = emulator.state_hash()
@@ -50,6 +59,8 @@ class BatteryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             kurosaki.Emulator.from_rom(str(self.rom), battery_path=str(save))
 
+    # Attempt an export to the loaded ROM path and require a Python runtime
+    # error with the entire ROM file unchanged.
     def test_export_cannot_overwrite_loaded_rom(self):
         emulator = kurosaki.Emulator.from_rom(str(self.rom))
         before = self.rom.read_bytes()

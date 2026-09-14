@@ -18,6 +18,9 @@ pub const NTSC_CPU_CYCLES_PER_FRAME: u64 = 29_780;
 const MAX_NTSC_CPU_CYCLES_PER_FRAME: u64 = NTSC_CPU_CYCLES_PER_FRAME + 120;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// One run request. max_instructions is an absolute cumulative limit;
+// replay intervals use the current software frame count. The debug bundle
+// is carried by the API but run_current does not resolve source locations.
 pub struct RunOptions {
     pub frames: u64,
     pub max_instructions: Option<u64>,
@@ -30,6 +33,8 @@ pub struct RunOptions {
 }
 
 impl Default for RunOptions {
+    // Default to one frame with tracing off, no replay inputs and strict handling
+    // of unimplemented opcodes.
     fn default() -> Self {
         Self {
             frames: 1,
@@ -45,6 +50,8 @@ impl Default for RunOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Snapshot of stored PPU registers, selected memory summaries and cumulative
+// counters. A nonzero count or stable hash alone does not establish visual accuracy.
 pub struct PpuObservation {
     pub ctrl: u8,
     pub mask: u8,
@@ -71,6 +78,9 @@ pub struct PpuObservation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// End-state report with cumulative counters and a per-call stop reason.
+// An instruction-limit stop can have a reason while stopped remains false,
+// because that field reflects the CPU halt state.
 pub struct RunSummary {
     pub format: String,
     pub rom_sha256: String,
@@ -88,11 +98,15 @@ pub struct RunSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Execution-step count grouped by CPU address, combining all physical banks
+// that were mapped there during the retained counting interval.
 pub struct PcHotspot {
     pub pc: u16,
     pub count: u64,
 }
 
+// Cartridge, core devices, execution counters and unbounded trace storage.
+// Construction, reset, snapshot restore and continuation have distinct effects.
 pub struct Emulator {
     pub cartridge: Cartridge,
     pub cpu: CpuState,
@@ -103,6 +117,8 @@ pub struct Emulator {
     pub pc_counts: BTreeMap<u16, u64>,
 }
 
+// Serialize PCM samples explicitly as little-endian bytes so observation hashes
+// do not depend on the host's native byte order.
 fn i16_samples_as_le_bytes(samples: &[i16]) -> Vec<u8> {
     let mut out = Vec::with_capacity(samples.len() * 2);
     for s in samples {
@@ -112,6 +128,8 @@ fn i16_samples_as_le_bytes(samples: &[i16]) -> Vec<u8> {
 }
 
 impl Emulator {
+    // Create the cartridge mapper and bus, preload any trainer through mapper RAM,
+    // and initialize execution counters. CPU reset is a separate operation.
     pub fn from_cartridge(cartridge: Cartridge) -> Result<Self> {
         let mut mapper = create_mapper(&cartridge)?;
         if let Some(trainer) = &cartridge.trainer {
@@ -141,20 +159,27 @@ impl Emulator {
         })
     }
 
+    // Build a fresh emulator for the cartridge, then validate and restore its checkpoint.
     pub fn from_snapshot(cartridge: Cartridge, snapshot: &Snapshot) -> Result<Self> {
         let mut emulator = Self::from_cartridge(cartridge)?;
         emulator.restore_snapshot(snapshot)?;
         Ok(emulator)
     }
 
+    // Restore a versioned checkpoint only when it belongs to the loaded ROM.
     pub fn restore_snapshot(&mut self, snapshot: &Snapshot) -> Result<()> {
         self.restore_snapshot_inner(snapshot, false)
     }
 
+    // Use the dedicated rebase restore path, which permits a changed ROM fingerprint
+    // while retaining format, mapper and private-state integrity checks.
     pub(crate) fn restore_snapshot_for_rebase(&mut self, snapshot: &Snapshot) -> Result<()> {
         self.restore_snapshot_inner(snapshot, true)
     }
 
+    // Validate checkpoint identity and mapper payload before restoring mapper/bus
+    // state and execution counters. Successful restoration discards transient trace
+    // and hotspot history; errors from individual restoration stages propagate.
     fn restore_snapshot_inner(&mut self, snapshot: &Snapshot, rebase: bool) -> Result<()> {
         if snapshot.format != "kurosaki-snapshot-v2" {
             return Err(KurosakiError::SnapshotFormat(format!(
@@ -195,6 +220,9 @@ impl Emulator {
                 .mapper
                 .restore_snapshot_bytes(&snapshot.mapper_private)?;
         }
+        // Mapper state has already been restored. If bus validation fails here,
+        // the existing emulator can retain a partially restored mapper; callers
+        // requiring isolation should construct through from_snapshot.
         self.bus.restore_snapshot(&snapshot.bus)?;
         self.cpu = snapshot.cpu;
         self.frame = snapshot.frame;
@@ -204,10 +232,13 @@ impl Emulator {
         Ok(())
     }
 
+    // Delegate a snapshot RAM patch to the mapper, which owns PRG-RAM layout validation.
     pub(crate) fn patch_snapshot_prg_ram(&mut self, cpu_address: u16, bytes: &[u8]) -> Result<()> {
         self.bus.mapper.patch_prg_ram_bytes(cpu_address, bytes)
     }
 
+    // Patch only physical CPU RAM, not its mirrored address windows. Validate the
+    // complete range before copying, including checked end-address arithmetic.
     pub(crate) fn patch_snapshot_cpu_ram(&mut self, cpu_address: u16, bytes: &[u8]) -> Result<()> {
         let start = usize::from(cpu_address);
         let end = start.checked_add(bytes.len()).ok_or_else(|| {
@@ -222,6 +253,8 @@ impl Emulator {
         Ok(())
     }
 
+    // Reset the CPU through the bus, optionally install the FDS fast-boot entry,
+    // and clear hotspot counts. This is not construction of an entirely new machine.
     pub fn reset(&mut self, trace_cfg: TraceConfig) {
         self.trace
             .push(TraceEvent::new("emu.reset", self.frame, self.cpu.cycles));
@@ -238,6 +271,9 @@ impl Emulator {
         self.pc_counts.clear();
     }
 
+    // Count the current PC, execute one CPU step, then advance attached devices by
+    // the consumed cycles. Allowing an unimplemented opcode converts it to a traced
+    // stop; it does not invent instruction behavior or continue past the opcode.
     pub fn step_instruction(
         &mut self,
         trace_cfg: TraceConfig,
@@ -275,7 +311,12 @@ impl Emulator {
         }
     }
 
+    // Execute until the PPU completes a frame, the CPU stops, or the bounded cycle
+    // budget is reached. The software frame counter advances even after an early break.
     pub fn step_frame(&mut self, trace_cfg: TraceConfig, allow_unimplemented: bool) -> Result<()> {
+        // The cycle budget is checked between instructions. Reaching the budget
+        // or finding a stopped CPU still proceeds to the software frame increment;
+        // a propagated instruction error exits before that increment.
         let frame_start = self.cpu.cycles;
         let ppu_frame_start = self.bus.ppu.rendered_frames;
         while self.bus.ppu.rendered_frames == ppu_frame_start {
@@ -291,16 +332,25 @@ impl Emulator {
         Ok(())
     }
 
+    // Reset before executing the requested run. Use run_current to continue restored or existing state.
     pub fn run(&mut self, options: RunOptions) -> RunSummary {
         self.reset(options.trace);
         self.run_current(options)
     }
 
+    // Continue from the current state with frame-based inputs and collect a run summary.
+    // Instruction limits are checked between frames, so a frame can overshoot the limit.
+    // Generated diagnostic candidates describe observations rather than confirmed bugs.
     pub fn run_current(&mut self, options: RunOptions) -> RunSummary {
+        // This call does not clear trace, device counters or hotspots. Even a
+        // zero-frame request produces diagnostics from the existing state.
         let mut stop_reason = None;
         for _ in 0..options.frames {
             let mut pad1 = options.pad1;
             let mut pad2 = options.pad2;
+            // Search replay entries from the end: the last covering entry wins,
+            // regardless of chronological ordering. Only buttons and reset are consumed
+            // here; disk-side and expected-frame-hash fields are not applied.
             if let Some(input) = options
                 .replay_frames
                 .iter()
@@ -315,6 +365,8 @@ impl Emulator {
                 }
             }
             self.bus.set_controller_state(pad1, pad2);
+            // Input and any replay reset are applied before this absolute instruction
+            // limit is checked. The limit does not constrain an individual frame step.
             if let Some(max) = options.max_instructions {
                 if self.instructions >= max {
                     stop_reason = Some(format!("max instruction limit {max} reached"));
@@ -331,6 +383,8 @@ impl Emulator {
                 break;
             }
         }
+        // Combine cartridge compatibility notes with accumulated runtime observations;
+        // heuristic PPU warnings do not establish the cause of a rendering defect.
         let mut diagnostics = DiagnosticReport::from_rom_info(&self.cartridge.info);
         if self.bus.ppu.data_writes_outside_vblank > 0 {
             diagnostics.push(crate::diagnostics::Diagnostic {
@@ -368,6 +422,8 @@ impl Emulator {
                 source: None,
             });
         }
+        // Lifetime write parity is a diagnostic heuristic; status reads can reset
+        // the actual shared latch, so parity alone does not prove a broken sequence.
         if !self.bus.ppu.addr_writes.is_multiple_of(2) {
             diagnostics.push(crate::diagnostics::Diagnostic {
                 code: "KS-PPU-0003".to_string(),
@@ -389,6 +445,8 @@ impl Emulator {
             });
         }
         let ppu_observation = self.ppu_observation();
+        // These thresholds inspect the complete stored 1 KiB nametable slice,
+        // including attributes. They do not identify the source of copied bytes.
         let dense_high_entropy_nt = ppu_observation.nametable0_nonzero > 890
             && ppu_observation.nametable0_unique_tiles > 80;
         let sparse_code_like_nt = ppu_observation.nametable0_nonzero > 700
@@ -457,6 +515,8 @@ impl Emulator {
                 frame: Some(self.frame), pc: Some(self.cpu.pc), function: None, source: None,
             });
         }
+        // The shared stall counter also includes DMC fetches. This legacy OAM
+        // diagnostic label does not distinguish the sources of all counted cycles.
         if self.bus.dma_stall_cycles > 0 {
             diagnostics.push(crate::diagnostics::Diagnostic {
                 code: "KS-DMA-0001".to_string(),
@@ -473,6 +533,8 @@ impl Emulator {
                 source: None,
             });
         }
+        // Only an instruction-limit stop with a sufficiently frequent top PC
+        // produces the loop candidate; intentional waits can satisfy the same rule.
         let pc_hotspots = self.pc_hotspots(8);
         if let Some(top_pc) = pc_hotspots.first() {
             let stopped_by_limit = stop_reason
@@ -515,6 +577,8 @@ impl Emulator {
         }
     }
 
+    // Sort sampled instruction addresses by descending execution count, breaking ties
+    // by address for deterministic output. Counts are keyed by CPU address, not ROM bank.
     pub fn pc_hotspots(&self, limit: usize) -> Vec<PcHotspot> {
         let mut hotspots = self
             .pc_counts
@@ -529,6 +593,9 @@ impl Emulator {
         hotspots
     }
 
+    // Summarize stored nametable bytes, palette/OAM hashes and PPU counters. The
+    // nametable slice includes attribute bytes, and the sprite count is a Y-range
+    // heuristic rather than proof that every counted sprite produced visible pixels.
     pub fn ppu_observation(&self) -> PpuObservation {
         let nametable0 = &self.bus.ppu.vram[0x2000..0x2400];
         let unique = nametable0.iter().copied().collect::<BTreeSet<_>>().len();
@@ -566,6 +633,9 @@ impl Emulator {
         }
     }
 
+    // Hash selected memory, rendering, audio-buffer and mapper state for comparisons.
+    // CPU registers and all timing fields are not included: this is an observation
+    // fingerprint, not a complete serialized-checkpoint identity.
     pub fn state_hash(&self) -> String {
         let mapper_bytes = self.bus.mapper.snapshot_bytes();
         let audio_bytes = i16_samples_as_le_bytes(&self.bus.apu.sample_buffer);
@@ -581,6 +651,8 @@ impl Emulator {
         ])
     }
 
+    // Capture CPU/bus/mapper state and execution counters in snapshot-v2 format,
+    // including a hash of the mapper-private payload for restoration checks.
     pub fn snapshot(&self) -> Snapshot {
         let mapper_private = self.bus.mapper.snapshot_bytes();
         Snapshot {
@@ -594,6 +666,8 @@ impl Emulator {
             mapper: self.bus.mapper.debug_state(),
             mapper_private: mapper_private.clone(),
             mapper_private_sha256: crate::hash::sha256_hex(&mapper_private),
+            // Record how many events existed, but do not embed their payloads.
+            // Normal restoration starts with an empty trace and hotspot map.
             last_event_count: self.trace.events.len(),
         }
     }

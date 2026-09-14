@@ -35,23 +35,30 @@ use zip::{write::FileOptions, ZipWriter};
 #[command(name = "kurosaki")]
 #[command(about = "KITAQFC-aware clean-room NES observation emulator CLI")]
 #[command(version)]
+// Top-level Clap command container. Parsing validates argument shape;
+// file contents and execution conditions are checked in handlers.
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Debug, Clone)]
+// Parsed starting address and file path; payload loading is deferred until rebase.
 struct PrgRamPatchSpec {
     cpu_address: u16,
     path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
+// Parsed physical CPU address and owned bytes for a contract-bound RAM patch.
 struct CpuRamPatchSpec {
     cpu_address: u16,
     bytes: Vec<u8>,
 }
 
+// Split ADDRESS=FILE once, accepting decimal or 0x/0X/$ addresses in
+// $6000-$7FFF and a nonempty path. File bytes and the complete range are
+// validated later against the rebase contract; the path is not opened here.
 fn parse_prg_ram_patch_spec(value: &str) -> std::result::Result<PrgRamPatchSpec, String> {
     let (address, path) = value
         .split_once('=')
@@ -82,6 +89,9 @@ fn parse_prg_ram_patch_spec(value: &str) -> std::result::Result<PrgRamPatchSpec,
     })
 }
 
+// Parse ADDRESS=HEXBYTES for physical CPU RAM and reject empty, odd-length
+// or out-of-range patches. Hex text is sliced by byte pairs and assumes
+// ASCII input; non-ASCII text can violate UTF-8 slice boundaries.
 fn parse_cpu_ram_patch_spec(value: &str) -> std::result::Result<CpuRamPatchSpec, String> {
     let (address, hex_bytes) = value
         .split_once('=')
@@ -123,6 +133,8 @@ fn parse_cpu_ram_patch_spec(value: &str) -> std::result::Result<CpuRamPatchSpec,
 }
 
 #[derive(Debug, Subcommand)]
+// Public command argument shapes and defaults. Plain comments here do
+// not alter Clap help output or option names.
 enum Commands {
     /// Export raw battery RAM from a matching snapshot (not a snapshot file).
     BatteryExport {
@@ -523,6 +535,8 @@ enum Commands {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
+// Accepted diagnostic category labels. The dispatcher currently ignores
+// --check selections; this enum does not activate separate checks.
 enum CheckKind {
     Ppu,
     Nmi,
@@ -535,6 +549,7 @@ enum CheckKind {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+// Available renderings of the same bounded static-analysis report.
 enum DecompileFormat {
     Json,
     Markdown,
@@ -542,6 +557,8 @@ enum DecompileFormat {
 }
 
 #[derive(Debug, Serialize)]
+// End-state registers and selected memory ranges for inspection, not a
+// resumable checkpoint or proof of a particular gameplay path.
 struct ObservationDump {
     format: &'static str,
     frame: u64,
@@ -553,6 +570,7 @@ struct ObservationDump {
 }
 
 #[derive(Debug, Serialize)]
+// Selected CPU fields copied after execution; cycles are in the outer record.
 struct CpuObservationDump {
     pc: u16,
     a: u8,
@@ -564,6 +582,7 @@ struct CpuObservationDump {
 }
 
 #[derive(Debug, Serialize)]
+// Stored PPU state with pixel-index statistics and rendering-write counters.
 struct PpuObservationDump {
     ctrl: u8,
     mask: u8,
@@ -585,6 +604,7 @@ struct PpuObservationDump {
 }
 
 #[derive(Debug, Serialize)]
+// Complete hexadecimal byte dump plus digest/counts for one labelled range.
 struct MemoryRangeDump {
     name: &'static str,
     address_space: &'static str,
@@ -595,6 +615,8 @@ struct MemoryRangeDump {
     hex: String,
 }
 
+// Run Clap parsing and dispatch on an explicitly sized worker stack and
+// propagate its result. Convert a worker panic into a CLI error.
 fn main() -> Result<()> {
     // The CLI links the static decompiler and report renderers. On Windows the
     // executable entry thread can have a much smaller stack than Rust test
@@ -609,6 +631,9 @@ fn main() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("KUROSAKI CLI worker thread panicked"))?
 }
 
+// Dispatch the parsed command and construct its trace selectors. Handler
+// return values determine exit status; several inspection/run handlers
+// report a stopped emulation in output without returning a CLI failure.
 fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
@@ -650,6 +675,8 @@ fn run_cli() -> Result<()> {
                 ..RunOptions::default()
             });
             write_json_or_stdout(&summary, json)?;
+            // Battery-run emits its summary first, then rejects a stopped run before
+            // writing snapshot, PNG or a new save sidecar.
             if summary.stopped {
                 bail!("battery run stopped: {:?}", summary.stop_reason);
             }
@@ -675,6 +702,8 @@ fn run_cli() -> Result<()> {
             rom,
             frames,
             max_instructions,
+            // The CLI always uses the headless core; this accepted switch does not
+            // select an alternate execution path.
             headless: _,
             state_hash,
             json,
@@ -784,6 +813,8 @@ fn run_cli() -> Result<()> {
             out,
             md,
             emit_diagnostics,
+            // Accepted check categories are currently discarded, so diagnose emits
+            // the complete implemented report rather than a filtered subset.
             check: _,
             kitaqfc_debug,
             allow_unimplemented,
@@ -979,6 +1010,9 @@ fn run_cli() -> Result<()> {
     }
 }
 
+// Load metadata, write optional JSON/Markdown, and print JSON when its
+// path is absent. This performs no emulation; cartridge-level FDS loading
+// can still require an external BIOS.
 fn inspect_rom(rom: PathBuf, json: Option<PathBuf>, md: Option<PathBuf>) -> Result<()> {
     let cart = Cartridge::load_file(&rom)
         .with_context(|| format!("failed to load ROM {}", rom.display()))?;
@@ -994,6 +1028,8 @@ fn inspect_rom(rom: PathBuf, json: Option<PathBuf>, md: Option<PathBuf>) -> Resu
     Ok(())
 }
 
+// Load optional metadata and emit the structural board audit before
+// returning an error for a failed policy. A saved failing report is intentional.
 fn audit_board_command(
     rom: PathBuf,
     expected_board: String,
@@ -1020,11 +1056,16 @@ fn audit_board_command(
     Ok(())
 }
 
+// Capture selected CPU/PPU state and memory bytes, reading the currently
+// mapped CHR window directly. The fixed queue range is only a guess; the
+// first framebuffer pixel supplies the comparison backdrop, not palette zero.
 fn observe_dump(emu: &mut Emulator) -> ObservationDump {
     let chr = (0..0x2000)
         .map(|address| emu.bus.mapper.read_chr(address))
         .collect::<Vec<_>>();
     let ppu = &emu.bus.ppu;
+    // Use pixel zero as a heuristic comparison color. It may itself contain
+    // foreground graphics, so non-backdrop count is not a visibility proof.
     let backdrop = ppu.frame_buffer.first().copied().unwrap_or_default();
     let frame_buffer_unique_colors = ppu
         .frame_buffer
@@ -1073,6 +1114,8 @@ fn observe_dump(emu: &mut Emulator) -> ObservationDump {
         ranges: vec![
             memory_range("cpu_ram", "cpu", 0x0000, &emu.bus.ram),
             memory_range(
+                // This fixed address range is labelled as a guess and is not resolved
+                // from compiler metadata or the loaded program's allocation map.
                 "vram_queue_guess",
                 "cpu",
                 0x0300,
@@ -1087,6 +1130,8 @@ fn observe_dump(emu: &mut Emulator) -> ObservationDump {
     }
 }
 
+// Describe the supplied byte slice with a label, address, nonzero count,
+// SHA-256 and full hex text. This does not read an address space itself.
 fn memory_range(
     name: &'static str,
     address_space: &'static str,
@@ -1104,6 +1149,7 @@ fn memory_range(
     }
 }
 
+// Format uppercase byte pairs separated by single spaces with no trailing space.
 fn hex_bytes(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 3);
     for (i, b) in bytes.iter().enumerate() {
@@ -1117,6 +1163,10 @@ fn hex_bytes(bytes: &[u8]) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+// Cold-run the requested frames, then export selected end-state artifacts
+// and the summary. Diagnostic break/capture selectors are evaluated after
+// the run; they do not interrupt execution at the first matching event.
+// A stopped summary alone is not converted to a CLI error here.
 fn run_rom(
     rom: PathBuf,
     frames: u64,
@@ -1176,6 +1226,8 @@ fn run_rom(
     if let Some(path) = emit_diagnostics {
         write_diagnostic_events_jsonl(&path, &diagnostic_events)?;
     }
+    // Diagnostic capture is evaluated against the completed run. The selector
+    // does not stop the core or preserve the state of the first matching event.
     let diagnostic_capture_requested =
         png_on_diagnostic.is_some() || snapshot_on_diagnostic.is_some();
     let diagnostic_match = break_on_diagnostic
@@ -1201,6 +1253,9 @@ fn run_rom(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Cold-run with the selected categories and replace the JSONL output.
+// The run summary is discarded; successful file output does not certify
+// that execution reached every requested frame.
 fn trace_rom(
     rom: PathBuf,
     frames: u64,
@@ -1227,6 +1282,8 @@ fn trace_rom(
 }
 
 #[derive(Debug, Serialize)]
+// Audio capture metadata from the resulting run; stopped/stop-reason fields
+// are not included in this export-specific report.
 struct AudioExportReport {
     format: &'static str,
     rom: PathBuf,
@@ -1241,6 +1298,9 @@ struct AudioExportReport {
 }
 
 #[allow(clippy::too_many_arguments)]
+// Enable unbounded capture before the cold run, write the collected mono
+// PCM and emit export metadata. Audio-trace selectors collect events in
+// memory but this command has no separate trace-file output.
 fn audio_export(
     rom: PathBuf,
     frames: u64,
@@ -1289,6 +1349,9 @@ fn audio_export(
     write_json_or_stdout(&report_obj, json)
 }
 
+// Build a complete RIFF/WAVE PCM16 mono file in memory with little-endian
+// lengths/samples, then replace the output. The format uses 32-bit sizes;
+// this helper does not support RF64 or validate oversized capture lengths.
 fn write_wav_pcm16_mono(path: &PathBuf, sample_rate: u32, samples: &[i16]) -> Result<()> {
     let mut out = Vec::with_capacity(44 + samples.len() * 2);
     let data_len = (samples.len() * 2) as u32;
@@ -1313,6 +1376,8 @@ fn write_wav_pcm16_mono(path: &PathBuf, sample_rate: u32, samples: &[i16]) -> Re
     Ok(())
 }
 
+// Cold-run with neutral inputs and tracing disabled, then report the
+// summary and its core PC hotspots as JSON and optional Markdown.
 fn profile_rom(
     rom: PathBuf,
     frames: u64,
@@ -1340,6 +1405,9 @@ fn profile_rom(
 }
 
 #[allow(clippy::too_many_arguments)]
+// With zero frames, inspect cartridge metadata only and skip debug-bundle
+// loading. Otherwise cold-run and export the cumulative diagnostic report,
+// optionally collecting events for JSONL. No diagnostic filter is applied here.
 fn diagnose_rom(
     rom: PathBuf,
     frames: u64,
@@ -1390,6 +1458,9 @@ fn diagnose_rom(
     Ok(())
 }
 
+// Cold-run neutral input and generate one neutral replay record for every
+// requested frame, attaching the resulting observation hash. This command
+// does not record live controller input or shorten entries after an early stop.
 fn replay_record(rom: PathBuf, frames: u64, out: PathBuf, allow_unimplemented: bool) -> Result<()> {
     let mut emu = load_emu(&rom)?;
     let summary = emu.run(RunOptions {
@@ -1420,6 +1491,11 @@ fn replay_record(rom: PathBuf, frames: u64, out: PathBuf, allow_unimplemented: b
 }
 
 #[allow(clippy::too_many_arguments)]
+// Apply a replay to a cold or strictly restored emulator using an absolute
+// final-frame target. Optionally capture a bounded trace window and verify
+// a supplied final observation hash. Unlike battery-run, this handler does
+// not validate replay format/ROM identity, and --verify is conditional on
+// an expected final hash being present.
 fn replay_run(
     rom: PathBuf,
     replay_path: PathBuf,
@@ -1461,6 +1537,8 @@ fn replay_run(
         }
         None => load_emu(&rom)?,
     };
+    // Replay --frames is the absolute target, unlike snapshot-resume
+    // where --frames is an additional duration.
     let initial_frame = emu.frame;
     emu.bus.apu.capture_full_audio = wav.is_some();
     if total_frames < initial_frame {
@@ -1498,6 +1576,8 @@ fn replay_run(
             }
         }
 
+        // Discard untraced prefix/reset history so the serialized capture starts
+        // with the explicit window marker.
         emu.trace.events.clear();
         push_replay_trace_window_marker(
             &mut emu,
@@ -1535,6 +1615,8 @@ fn replay_run(
             trace,
             Some(captured_events),
         );
+        // Freeze the bounded window before running its untraced suffix; later
+        // events retained in the emulator cannot leak into this saved string.
         let trace_jsonl = emu.trace.to_jsonl()?;
 
         let suffix_frames = total_frames - end_frame_exclusive;
@@ -1570,6 +1652,8 @@ fn replay_run(
             ))
         }
     };
+    // Verify only the optional final observation hash. Expected per-frame
+    // and trace hashes are not checked by this path.
     if verify {
         if let Some(expected) = replay.expected_final_state_hash {
             if expected != summary.final_state_hash {
@@ -1597,6 +1681,8 @@ fn replay_run(
     write_json_or_stdout(&summary, json)
 }
 
+// Clone the replay intervals into a core continuation request with neutral
+// fallback inputs, selected tracing and no instruction cap or debug bundle.
 fn replay_run_options(
     frames: u64,
     trace: TraceConfig,
@@ -1615,6 +1701,8 @@ fn replay_run_options(
     }
 }
 
+// Require explicit nonempty bounds within [initial_frame,total_frames]
+// and at least one trace category. Return absolute start/exclusive-end values.
 fn validate_replay_trace_window(
     total_frames: u64,
     initial_frame: u64,
@@ -1662,6 +1750,9 @@ fn validate_replay_trace_window(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Append a boundary event carrying the replay file hash, interval, entry
+// count and selected categories. The optional captured count excludes the
+// start marker; this marker does not alter execution.
 fn push_replay_trace_window_marker(
     emu: &mut Emulator,
     kind: &str,
@@ -1701,6 +1792,8 @@ fn push_replay_trace_window_marker(
     emu.trace.push(marker);
 }
 
+// Cold-run and export the resulting v2 state even if execution stopped
+// early. This handler does not emit or validate the run summary.
 fn snapshot_save(
     rom: PathBuf,
     frames: u64,
@@ -1724,6 +1817,8 @@ fn snapshot_save(
     Ok(())
 }
 
+// Parse and print/copy a v2 snapshot after checking only its format label.
+// Without a cartridge this is inspection, not fingerprint-strict restoration.
 fn snapshot_load(snapshot: PathBuf, json: Option<PathBuf>) -> Result<()> {
     let snap: Snapshot = serde_json::from_str(&fs::read_to_string(snapshot)?)?;
     if snap.format != "kurosaki-snapshot-v2" {
@@ -1736,6 +1831,8 @@ fn snapshot_load(snapshot: PathBuf, json: Option<PathBuf>) -> Result<()> {
 }
 
 #[derive(Debug, Serialize)]
+// Flatten the successful core contract report and add the exact serialized
+// output-file digest, distinct from the mapper-private payload digest.
 struct SnapshotRebaseCliReport {
     #[serde(flatten)]
     rebase: SnapshotRebaseReport,
@@ -1743,6 +1840,10 @@ struct SnapshotRebaseCliReport {
 }
 
 #[allow(clippy::too_many_arguments)]
+// Read both ROMs, exact snapshot bytes, contract and supplied patches; bind
+// the file digest to those parsed snapshot bytes and call the strict rebase
+// API. Create outputs exclusively, and remove the new snapshot best-effort
+// if creation/writing of the requested report fails.
 fn snapshot_rebase(
     source_rom: PathBuf,
     target_rom: PathBuf,
@@ -1803,6 +1904,9 @@ fn snapshot_rebase(
         output_snapshot_file_sha256: sha256_hex(&output_bytes),
     };
 
+    // Create the snapshot first. Report serialization/write failure can
+    // leave different partial effects; only write_create_new failure triggers
+    // the following best-effort removal of the new snapshot.
     write_create_new_bytes(&out, &output_bytes)?;
     if let Some(path) = json {
         let report_bytes = serde_json::to_vec_pretty(&report)?;
@@ -1817,6 +1921,9 @@ fn snapshot_rebase(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Strictly restore the supplied ROM/snapshot, optionally reset the CPU,
+// then run an additional frame count with explicit input masks. Export the
+// resulting trace, image, observations/state and cumulative summary.
 fn snapshot_resume(
     rom: PathBuf,
     snapshot: PathBuf,
@@ -1868,6 +1975,7 @@ fn snapshot_resume(
 }
 
 #[derive(Debug, Serialize)]
+// Selected identity-string comparison, intentionally smaller than a full state diff.
 struct SnapshotDiffReport {
     format: &'static str,
     before_rom_sha256: String,
@@ -1880,6 +1988,9 @@ struct SnapshotDiffReport {
     same_mapper_private: bool,
 }
 
+// Compare stored ROM and mapper-payload hash strings plus frame labels.
+// This is not a full CPU/bus diff and does not recompute hashes or validate
+// restoration; equal reported digests can conceal inconsistent input payloads.
 fn diff_snapshots(
     before: PathBuf,
     after: PathBuf,
@@ -1906,6 +2017,10 @@ fn diff_snapshots(
     Ok(())
 }
 
+// Choose exact physical-bank disassembly first, mapped disassembly for
+// a start address or snapshot, otherwise the legacy reset-window path.
+// The legacy path still prints text with --json alone; mapped/physical paths
+// suppress stdout when a JSON output was requested.
 fn disasm_rom(
     rom: PathBuf,
     bytes: usize,
@@ -2031,6 +2146,10 @@ fn disasm_rom(
 }
 
 #[allow(clippy::too_many_arguments)]
+// Build the initial or restored mapper context, run bounded static analysis,
+// then overlay optional annotations and parsed trace events before rendering.
+// Automatic annotation lookup replaces the ROM extension with .decompile.json;
+// these inputs describe analysis context, not newly executed verification.
 fn decompile_rom(
     rom: PathBuf,
     out: Option<PathBuf>,
@@ -2068,6 +2187,8 @@ fn decompile_rom(
         },
     )?;
 
+    // An explicit sidecar wins; otherwise auto-load ROM-with-replaced-extension
+    // when present. Annotation content is applied after initial function selection.
     let annotation_path = annotations.or_else(|| {
         let sidecar = rom.with_extension("decompile.json");
         sidecar.exists().then_some(sidecar)
@@ -2122,6 +2243,8 @@ fn decompile_rom(
     Ok(())
 }
 
+// Trim outer whitespace and parse a 16-bit decimal address or 0x/0X/$
+// hexadecimal address, returning a contextual error on malformed input.
 fn parse_cpu_address(value: &str) -> Result<u16> {
     let trimmed = value.trim();
     let (radix, digits) = if let Some(hex) = trimmed.strip_prefix("0x") {
@@ -2137,6 +2260,8 @@ fn parse_cpu_address(value: &str) -> Result<u16> {
         .with_context(|| format!("invalid CPU address {value}; expected 0..65535 or hexadecimal"))
 }
 
+// Emit header/registry diagnostics only. Despite the command name, this
+// does not execute mapper-register tests or CPU instructions.
 fn mapper_test(rom: PathBuf, json: Option<PathBuf>) -> Result<()> {
     let cart = Cartridge::load_file(&rom)?;
     let report_obj = DiagnosticReport::from_rom_info(&cart.info);
@@ -2144,6 +2269,7 @@ fn mapper_test(rom: PathBuf, json: Option<PathBuf>) -> Result<()> {
 }
 
 #[derive(Debug, Serialize)]
+// Disk identity and parsed-file inventory; no BIOS or raw file payload is embedded.
 struct FdsInspectReport {
     format: &'static str,
     path: PathBuf,
@@ -2158,6 +2284,9 @@ struct FdsInspectReport {
     note: String,
 }
 
+// Parse disk blocks directly and report their metadata and inferred boot
+// vector without requiring a BIOS. File payload bytes are omitted by their
+// serialization policy.
 fn fds_inspect(disk: PathBuf, json: Option<PathBuf>) -> Result<()> {
     let bytes = fs::read(&disk)?;
     let parsed = FdsDiskImage::from_bytes(&bytes)?;
@@ -2177,6 +2306,9 @@ fn fds_inspect(disk: PathBuf, json: Option<PathBuf>) -> Result<()> {
     write_json_or_stdout(&report_obj, json)
 }
 
+// Create the output directory and replace raw CHR-ROM, metadata and a
+// brief README. CHR-RAM-only cartridges produce an empty chr.bin; this
+// does not capture runtime patterns, nametables or palettes.
 fn export_assets(rom: PathBuf, out: PathBuf) -> Result<()> {
     let cart = Cartridge::load_file(&rom)?;
     fs::create_dir_all(&out)?;
@@ -2189,6 +2321,9 @@ fn export_assets(rom: PathBuf, out: PathBuf) -> Result<()> {
     Ok(())
 }
 
+// Wrap arbitrary parsed JSON in a Markdown code block with a best-effort
+// format label. This does not validate a report schema or escape Markdown
+// delimiters embedded in the label or payload.
 fn report_file(input: PathBuf, md: PathBuf) -> Result<()> {
     let text = fs::read_to_string(input)?;
     let value: serde_json::Value = serde_json::from_str(&text)?;
@@ -2206,11 +2341,13 @@ fn report_file(input: PathBuf, md: PathBuf) -> Result<()> {
     Ok(())
 }
 
+// Load the cartridge and construct its mapper/bus without resetting the CPU.
 fn load_emu(rom: &PathBuf) -> Result<Emulator> {
     let cart = Cartridge::load_file(rom)?;
     Ok(Emulator::from_cartridge(cart)?)
 }
 
+// Read an optional generic compiler-debug JSON bundle; return None when absent.
 fn load_debug(path: Option<PathBuf>) -> Result<Option<KitaqfcDebugBundle>> {
     match path {
         Some(p) => Ok(Some(KitaqfcDebugBundle::load(p)?)),
@@ -2218,6 +2355,8 @@ fn load_debug(path: Option<PathBuf>) -> Result<Option<KitaqfcDebugBundle>> {
     }
 }
 
+// Select PPU/APU/mapper/NMI/DMA observations when requested, leaving CPU
+// and generic memory tracing off.
 fn diagnostic_trace_config(enabled: bool) -> TraceConfig {
     if enabled {
         TraceConfig {
@@ -2233,6 +2372,9 @@ fn diagnostic_trace_config(enabled: bool) -> TraceConfig {
     }
 }
 
+// Trim and ASCII-fold the selector, then match event type or summary-key
+// substrings. Empty/ALL/* means any existing event; unlike the Python helper,
+// an empty event list never matches these wildcard selectors.
 fn diagnostic_break_matches(events: &[DiagnosticEvent], selector: &str) -> bool {
     let normalized = selector.trim().to_ascii_uppercase();
     if normalized.is_empty() || normalized == "ALL" || normalized == "*" {
@@ -2244,6 +2386,8 @@ fn diagnostic_break_matches(events: &[DiagnosticEvent], selector: &str) -> bool 
     })
 }
 
+// Create parent directories, serialize one event per line and replace the
+// output. Empty events produce an empty file.
 fn write_diagnostic_events_jsonl(path: &PathBuf, events: &[DiagnosticEvent]) -> Result<()> {
     ensure_parent(path)?;
     let mut out = String::new();
@@ -2255,6 +2399,10 @@ fn write_diagnostic_events_jsonl(path: &PathBuf, events: &[DiagnosticEvent]) -> 
     Ok(())
 }
 
+// Create a deflated ZIP of supplied end-state data and descriptive plans.
+// The retest command is a template and no plan is executed; there is no
+// starting checkpoint or full replay in this archive. Direct output can
+// remain partial if a later archive member fails.
 fn write_repro_bundle(
     summary: &kurosaki_core::emulator::RunSummary,
     emu: &Emulator,
@@ -2366,6 +2514,7 @@ fn write_repro_bundle(
     Ok(())
 }
 
+// Start a ZIP member and write indented JSON without a trailing newline.
 fn zip_json<T: Serialize>(
     zip: &mut ZipWriter<fs::File>,
     options: FileOptions,
@@ -2377,6 +2526,7 @@ fn zip_json<T: Serialize>(
     Ok(())
 }
 
+// Start a ZIP member and write the provided UTF-8 text unchanged.
 fn zip_text(
     zip: &mut ZipWriter<fs::File>,
     options: FileOptions,
@@ -2388,6 +2538,7 @@ fn zip_text(
     Ok(())
 }
 
+// Create missing parent directories, ignoring the empty parent of a bare filename.
 fn ensure_parent(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -2397,6 +2548,9 @@ fn ensure_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
+// Exclusively create an output after ensuring its parent. On a write error
+// close and remove this newly created file best-effort; existing files are
+// never opened for replacement. No explicit durability sync is performed.
 fn write_create_new_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     ensure_parent(path)?;
     let mut file = OpenOptions::new()
@@ -2412,6 +2566,8 @@ fn write_create_new_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+// Serialize indented JSON and replace the requested file after creating
+// parents, or print it with a newline when no path is supplied.
 fn write_json_or_stdout<T: Serialize>(value: &T, path: Option<PathBuf>) -> Result<()> {
     let text = serde_json::to_string_pretty(value)?;
     if let Some(path) = path {
@@ -2423,6 +2579,9 @@ fn write_json_or_stdout<T: Serialize>(value: &T, path: Option<PathBuf>) -> Resul
     Ok(())
 }
 
+// List every registry ID or only Implemented/Scaffold entries. Emit JSON
+// or console rows plus optional Markdown; only note-column pipes receive
+// explicit table escaping.
 fn mapper_list(all: bool, json: Option<PathBuf>, md: Option<PathBuf>) -> Result<()> {
     let specs = if all {
         all_mapper_specs()
@@ -2461,6 +2620,7 @@ fn mapper_list(all: bool, json: Option<PathBuf>, md: Option<PathBuf>) -> Result<
     Ok(())
 }
 
+// Emit the registry descriptor for the requested mapper number without loading a ROM.
 fn mapper_info(mapper: u16, json: Option<PathBuf>) -> Result<()> {
     let spec = mapper_spec(mapper);
     write_json_or_stdout(&spec, json)
@@ -2470,6 +2630,7 @@ fn mapper_info(mapper: u16, json: Option<PathBuf>) -> Result<()> {
 mod tests {
     use super::*;
 
+    // Construct the minimal CPU-only category selection for trace-window tests.
     fn cpu_trace() -> TraceConfig {
         TraceConfig {
             cpu: true,
@@ -2478,6 +2639,7 @@ mod tests {
     }
 
     #[test]
+    // Reject missing, equal and reversed trace bounds through the validation helper.
     fn replay_trace_window_requires_explicit_non_empty_bounds() {
         assert!(validate_replay_trace_window(20, 0, None, Some(10), cpu_trace()).is_err());
         assert!(validate_replay_trace_window(20, 0, Some(4), None, cpu_trace()).is_err());
@@ -2486,6 +2648,8 @@ mod tests {
     }
 
     #[test]
+    // Reject windows beyond the target or before restored state and an empty
+    // category selection, then check two valid absolute intervals.
     fn replay_trace_window_stays_inside_run_and_requires_a_category() {
         assert!(validate_replay_trace_window(20, 0, Some(4), Some(21), cpu_trace()).is_err());
         assert!(
@@ -2503,6 +2667,7 @@ mod tests {
     }
 
     #[test]
+    // Check Clap rejects replay trace bounds/categories without --trace-jsonl.
     fn replay_trace_cli_rejects_trace_flags_without_output() {
         let parsed = Cli::try_parse_from([
             "kurosaki",
@@ -2519,6 +2684,8 @@ mod tests {
     }
 
     #[test]
+    // Check argument parsing accepts explicit bounds with memory-write/NMI
+    // selectors. No replay or trace file is opened by this test.
     fn replay_trace_cli_accepts_bounded_category_selection() {
         let parsed = Cli::try_parse_from([
             "kurosaki",
@@ -2540,6 +2707,7 @@ mod tests {
     }
 
     #[test]
+    // Check the replay snapshot-restoration option parses with a target frame.
     fn replay_trace_cli_accepts_snapshot_restore() {
         let parsed = Cli::try_parse_from([
             "kurosaki",
@@ -2555,6 +2723,7 @@ mod tests {
     }
 
     #[test]
+    // Check the optional CPU-reset switch parses for snapshot continuation.
     fn snapshot_resume_cli_accepts_reset_at_start() {
         let parsed = Cli::try_parse_from([
             "kurosaki",
@@ -2569,6 +2738,8 @@ mod tests {
     }
 
     #[test]
+    // Reject a missing contract and accept a fully specified rebase with
+    // CPU/PRG patches. Both cases supply --out; output omission is not exercised.
     fn snapshot_rebase_cli_requires_explicit_contract_and_output() {
         let missing_contract = Cli::try_parse_from([
             "kurosaki",
@@ -2602,6 +2773,7 @@ mod tests {
     }
 
     #[test]
+    // Require argument parsing to reject a PRG-RAM patch starting at $8000.
     fn snapshot_rebase_cli_rejects_patch_outside_prg_ram() {
         let parsed = Cli::try_parse_from([
             "kurosaki",
@@ -2620,6 +2792,7 @@ mod tests {
     }
 
     #[test]
+    // Reject a two-byte CPU patch that starts at $07FF and crosses the physical range.
     fn snapshot_rebase_cli_rejects_cpu_ram_patch_outside_physical_ram() {
         let parsed = Cli::try_parse_from([
             "kurosaki",
@@ -2638,6 +2811,8 @@ mod tests {
     }
 
     #[test]
+    // Accept an exact-bank selector with a start address and reject its
+    // combination with snapshot-based mapper context.
     fn disasm_cli_accepts_physical_bank_and_rejects_snapshot_mix() {
         let physical = Cli::try_parse_from([
             "kurosaki",

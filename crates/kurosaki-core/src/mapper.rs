@@ -71,14 +71,20 @@ pub struct MapperDebugState {
 }
 
 pub trait Mapper: Send {
+    // Identify the implemented mapper for cartridge dispatch and diagnostics.
     fn mapper_id(&self) -> u16;
+    // Return the implementation's human-readable board-family name.
     fn mapper_name(&self) -> &'static str;
     /// Returns the physical 8 KiB PRG-ROM bank currently visible at a CPU
     /// address. RAM, registers, firmware outside cartridge PRG-ROM, and
     /// unresolved probe mappings return `None`.
+    // Default to an unknown physical ROM bank until an implementation
+    // provides a mapping; firmware and RAM are not cartridge PRG ROM.
     fn physical_prg_bank_8k(&self, _addr: u16) -> Option<u16> {
         None
     }
+    // Read the mapper-controlled CPU address space, allowing register side
+    // effects and optional events stamped with the supplied frame/cycle.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -87,6 +93,7 @@ pub trait Mapper: Send {
         _cfg: TraceConfig,
         _sink: &mut TraceSink,
     ) -> u8;
+    // Apply a CPU-side RAM/register write and optionally record mapper events.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -96,8 +103,12 @@ pub trait Mapper: Send {
         cfg: TraceConfig,
         sink: &mut TraceSink,
     );
+    // Read the currently selected pattern-memory byte through the mapper.
     fn read_chr(&mut self, addr: u16) -> u8;
+    // Write pattern memory where the selected board permits CHR RAM writes.
     fn write_chr(&mut self, addr: u16, value: u8);
+    // Ignore PPU fetch addresses by default; latch/IRQ boards override this
+    // hook to observe the address stream supplied by the PPU.
     fn notify_ppu_addr(
         &mut self,
         _addr: u16,
@@ -107,6 +118,7 @@ pub trait Mapper: Send {
         _sink: &mut TraceSink,
     ) {
     }
+    // Do nothing for boards without CPU-clocked counters or devices.
     fn clock_cpu(
         &mut self,
         _cpu_cycles: u64,
@@ -116,26 +128,38 @@ pub trait Mapper: Send {
         _sink: &mut TraceSink,
     ) {
     }
+    // Default to no mapper interrupt request.
     fn irq_pending(&self) -> bool {
         false
     }
+    // Leave state unchanged when no mapper interrupt latch is implemented.
     fn clear_irq(&mut self) {}
+    // Contribute silence unless the board implements expansion audio.
     fn expansion_audio_sample(&mut self, _sample_rate: u32) -> i16 {
         0
     }
+    // Use four independent nametables as the fallback. Board-specific
+    // mirroring requires an override; a debug string alone does not select it.
     fn nametable_mirroring(&self) -> NametableMirroring {
         NametableMirroring::FourScreen
     }
+    // Expose diagnostic metadata and mapper-specific bank-window summaries.
     fn debug_state(&self) -> MapperDebugState;
+    // Serialize the implementation's private state. Producing bytes does
+    // not imply restore support; restore is a separate method.
     fn snapshot_bytes(&self) -> Vec<u8>;
     /// Raw physical PRG RAM, not a CPU-window read or snapshot register blob.
     /// The cartridge layer separately validates whether this RAM is battery backed.
+    // Expose no physical battery/work RAM unless the implementation opts in.
     fn battery_prg_ram(&self) -> Option<&[u8]> {
         None
     }
+    // Provide no writable sidecar RAM by default.
     fn battery_prg_ram_mut(&mut self) -> Option<&mut [u8]> {
         None
     }
+    // Reject restore explicitly when the implementation has no decoder
+    // for its private snapshot representation.
     fn restore_snapshot_bytes(&mut self, _bytes: &[u8]) -> Result<()> {
         Err(KurosakiError::SnapshotFormat(format!(
             "mapper {} does not support restorable snapshots",
@@ -145,12 +169,16 @@ pub trait Mapper: Send {
     /// Restores mutable mapper state from a snapshot created for a compatible
     /// cartridge while retaining configuration owned by the loaded target
     /// cartridge. The default remains the strict same-configuration restore.
+    // Delegate to strict restore unless the implementation defines which
+    // configuration fields may differ between compatible cartridges.
     fn restore_rebased_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         self.restore_snapshot_bytes(bytes)
     }
     /// Applies an explicit patch to battery/work RAM represented by the
     /// mapper snapshot. Implementations must reject addresses outside their
     /// CPU-visible RAM window and must not alter mapper register state.
+    // Reject explicit snapshot RAM patches for boards without a validated
+    // CPU-address-to-physical-RAM patch implementation.
     fn patch_prg_ram_bytes(&mut self, _cpu_address: u16, _bytes: &[u8]) -> Result<()> {
         Err(KurosakiError::SnapshotFormat(format!(
             "mapper {} does not support snapshot PRG-RAM patches",
@@ -159,6 +187,9 @@ pub trait Mapper: Send {
     }
 }
 
+// Dispatch cartridge metadata to an executable board implementation or
+// the inspection fallback. Clone ROM/device data into mapper-owned state;
+// factory success alone does not certify full hardware compatibility.
 pub fn create_mapper(cart: &Cartridge) -> Result<Box<dyn Mapper>> {
     let mapper = cart.info.mapper;
     match mapper {
@@ -167,6 +198,8 @@ pub fn create_mapper(cart: &Cartridge) -> Result<Box<dyn Mapper>> {
             cart.chr_rom.clone(),
             cart.info.mirroring,
         ))),
+        // Use the cartridge's inferred/declared board profile and RAM sizes for
+        // MMC1; other metadata does not automatically select SUROM.
         1 => Ok(Box::new(Mmc1Mapper::new_with_config(
             cart.prg_rom.clone(),
             cart.chr_rom.clone(),
@@ -234,6 +267,8 @@ pub fn create_mapper(cart: &Cartridge) -> Result<Box<dyn Mapper>> {
             cart.chr_rom.clone(),
             cart.info.mirroring,
         ))),
+        // Only submapper zero uses this BNROM implementation; other mapper 34
+        // submappers fall through to the inspection fallback.
         34 if cart.info.submapper == 0 => Ok(Box::new(SimpleBankMapper::new(
             SimpleBankKind::Bnrom,
             cart.prg_rom.clone(),
@@ -302,6 +337,8 @@ pub fn create_mapper(cart: &Cartridge) -> Result<Box<dyn Mapper>> {
             cart.info.battery,
         ))),
         20 => {
+            // Attach parsed disk data only when present; ordinary mapper-20 input
+            // uses the same mapper without a disk image.
             if let Some(disk) = &cart.fds_disk {
                 Ok(Box::new(FdsMapper::new_with_disk(
                     cart.prg_rom.clone(),
@@ -338,6 +375,8 @@ pub fn create_mapper(cart: &Cartridge) -> Result<Box<dyn Mapper>> {
             cart.info.mirroring,
             cart.info.battery,
         ))),
+        // Retain inspection access for unknown boards while marking their
+        // mapping as probe-only; this is not a board-accurate implementation.
         _ => Ok(Box::new(GenericProbeMapper::new(
             mapper,
             cart.prg_rom.clone(),
@@ -347,6 +386,8 @@ pub fn create_mapper(cart: &Cartridge) -> Result<Box<dyn Mapper>> {
     }
 }
 
+// Combine registry support/family metadata with caller-supplied windows
+// and flags. MMC1-specific details start absent for other implementations.
 pub(crate) fn mapper_debug_state(
     mapper: u16,
     name: impl Into<String>,
@@ -380,6 +421,8 @@ pub(crate) fn mapper_debug_state(
     }
 }
 
+// Use supplied CHR ROM as read-only backing, or allocate 8 KiB of zeroed
+// CHR RAM when no ROM bytes are present; return its writability flag.
 pub(crate) fn ensure_chr(chr_rom: Vec<u8>) -> (Vec<u8>, bool) {
     if chr_rom.is_empty() {
         (vec![0; 8 * 1024], true)
@@ -388,9 +431,13 @@ pub(crate) fn ensure_chr(chr_rom: Vec<u8>) -> (Vec<u8>, bool) {
     }
 }
 
+// Count complete banks, with one logical bank even for empty/short data.
+// Callers must supply a nonzero bank size.
 pub(crate) fn bank_count(len: usize, bank_size: usize) -> usize {
     (len / bank_size).max(1)
 }
+// Fold a selected bank into the available count, mapping a zero count
+// to bank zero without dividing by zero.
 pub(crate) fn wrap_bank(bank: usize, count: usize) -> usize {
     if count == 0 {
         0
@@ -398,6 +445,8 @@ pub(crate) fn wrap_bank(bank: usize, count: usize) -> usize {
         bank % count
     }
 }
+// Return zero for empty backing; otherwise wrap bank, within-bank offset
+// and final byte index. A partial final bank is not counted separately.
 pub(crate) fn read_bank(data: &[u8], bank_size: usize, bank: usize, offset: usize) -> u8 {
     if data.is_empty() {
         return 0;
@@ -406,6 +455,8 @@ pub(crate) fn read_bank(data: &[u8], bank_size: usize, bank: usize, offset: usiz
     let index = wrap_bank(bank, count) * bank_size + (offset % bank_size);
     data[index % data.len()]
 }
+// Convert a wrapped CPU-window selection into a physical 8 KiB ROM bank.
+// Reject empty backing, unsupported window sizes or an index beyond u16.
 pub(crate) fn physical_bank_8k(
     prg_rom_len: usize,
     bank_size: usize,
@@ -419,6 +470,8 @@ pub(crate) fn physical_bank_8k(
     let byte_offset = (bank * bank_size + offset % bank_size) % prg_rom_len;
     u16::try_from(byte_offset / (8 * 1024)).ok()
 }
+// Mirror the read helper's bank/offset wrapping for writable backing,
+// ignoring an empty slice. The caller decides whether writes are allowed.
 pub(crate) fn write_bank(data: &mut [u8], bank_size: usize, bank: usize, offset: usize, value: u8) {
     if data.is_empty() {
         return;
@@ -428,6 +481,7 @@ pub(crate) fn write_bank(data: &mut [u8], bank_size: usize, bank: usize, offset:
     let len = data.len();
     data[index % len] = value;
 }
+// Encode all header mirroring variants into stable private-state bytes.
 pub(crate) fn mirroring_code(m: Mirroring) -> u8 {
     match m {
         Mirroring::Horizontal => 0,
@@ -437,6 +491,7 @@ pub(crate) fn mirroring_code(m: Mirroring) -> u8 {
         Mirroring::Unknown => 4,
     }
 }
+// Return diagnostic text for the header mirroring policy.
 pub(crate) fn mirroring_name(m: Mirroring) -> String {
     match m {
         Mirroring::Horizontal => "horizontal".to_string(),
@@ -447,6 +502,8 @@ pub(crate) fn mirroring_name(m: Mirroring) -> String {
     }
 }
 
+// Translate fixed header mirroring, falling back to four-screen for
+// unknown or mapper-controlled headers without a specific override.
 fn fixed_nametable_mirroring(m: Mirroring) -> NametableMirroring {
     match m {
         Mirroring::Horizontal => NametableMirroring::Horizontal,
@@ -457,6 +514,8 @@ fn fixed_nametable_mirroring(m: Mirroring) -> NametableMirroring {
 }
 
 #[allow(clippy::too_many_arguments)]
+// Emit a mapper write event only when mapper tracing is enabled,
+// attaching the supplied address, value, timestamp and explanation.
 pub(crate) fn trace_mapper_write(
     kind: &str,
     addr: u16,
@@ -486,6 +545,8 @@ pub struct NromMapper {
 }
 
 impl NromMapper {
+    // Allocate 8 KiB PRG RAM and either supplied CHR ROM or fallback CHR RAM;
+    // retain fixed header mirroring and unbanked PRG bytes.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         Self {
@@ -499,18 +560,25 @@ impl NromMapper {
 }
 
 impl Mapper for NromMapper {
+    // Expose physical PRG RAM independently of CPU reads; cartridge policy
+    // separately determines whether it may be exported as battery data.
     fn battery_prg_ram(&self) -> Option<&[u8]> {
         Some(&self.prg_ram)
     }
+    // Expose physical PRG RAM for validated sidecar import.
     fn battery_prg_ram_mut(&mut self) -> Option<&mut [u8]> {
         Some(&mut self.prg_ram)
     }
+    // Identify this fixed-bank implementation as mapper zero.
     fn mapper_id(&self) -> u16 {
         0
     }
+    // Report the NROM board-family label.
     fn mapper_name(&self) -> &'static str {
         "NROM"
     }
+    // Label the current ROM byte using a mirrored 16 KiB or fixed 32 KiB
+    // window; RAM and addresses below $8000 have no physical ROM label.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -522,6 +590,7 @@ impl Mapper for NromMapper {
         };
         physical_bank_8k(self.prg_rom.len(), bank_size, 0, addr as usize - 0x8000)
     }
+    // Use the fixed header policy, with four-screen as the unknown fallback.
     fn nametable_mirroring(&self) -> NametableMirroring {
         match self.mirroring {
             Mirroring::Horizontal => NametableMirroring::Horizontal,
@@ -531,6 +600,9 @@ impl Mapper for NromMapper {
         }
     }
 
+    // Read PRG RAM at $6000-$7FFF or fixed/mirrored ROM above it and optionally
+    // trace the value and physical bank. Direct ROM indexing assumes a valid
+    // 16 KiB or 32 KiB NROM backing supplied by the cartridge loader.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -562,6 +634,8 @@ impl Mapper for NromMapper {
         value
     }
 
+    // Store in the PRG-RAM window; ignore ROM writes while optionally tracing
+    // that ignored access. Other addresses have no effect.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -590,9 +664,11 @@ impl Mapper for NromMapper {
         }
     }
 
+    // Read the unbanked CHR backing with address wrapping.
     fn read_chr(&mut self, addr: u16) -> u8 {
         self.chr[(addr as usize) % self.chr.len()]
     }
+    // Modify the wrapped CHR byte only when fallback RAM was allocated.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let len = self.chr.len();
@@ -600,6 +676,8 @@ impl Mapper for NromMapper {
         }
     }
 
+    // Report two 16 KiB PRG slots, one CHR window and effective mirroring;
+    // these summary bank units differ from physical_prg_bank_8k.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             0,
@@ -622,10 +700,14 @@ impl Mapper for NromMapper {
         )
     }
 
+    // Concatenate physical PRG RAM and CHR backing, including CHR ROM bytes
+    // when present; configuration is held by the loaded mapper.
     fn snapshot_bytes(&self) -> Vec<u8> {
         [self.prg_ram.as_slice(), self.chr.as_slice()].concat()
     }
 
+    // Check the complete expected length before restoring both backing
+    // slices; the method does not independently validate cartridge identity.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         let expected_len = self.prg_ram.len() + self.chr.len();
         if bytes.len() != expected_len {
@@ -656,6 +738,8 @@ pub struct UxromMapper {
 }
 
 impl UxromMapper {
+    // Choose mapper 2 defaults: a low-nibble bank register, switchable lower
+    // 16 KiB PRG window and fixed final upper bank.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         Self::new_variant(
             2,
@@ -670,6 +754,8 @@ impl UxromMapper {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // Configure the variant's bank-bit shift/mask and which PRG half is
+    // fixed, then start at selected bank zero with fixed header mirroring.
     fn new_variant(
         mapper_id: u16,
         name: &'static str,
@@ -696,12 +782,16 @@ impl UxromMapper {
     }
 }
 impl Mapper for UxromMapper {
+    // Return the configured variant ID rather than always reporting mapper 2.
     fn mapper_id(&self) -> u16 {
         self.mapper_id
     }
+    // Return the board-family label selected by the constructor.
     fn mapper_name(&self) -> &'static str {
         self.name
     }
+    // Resolve each 16 KiB CPU half through its fixed or selected PRG bank,
+    // then convert the result into the shared physical 8 KiB bank units.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         let (bank, offset) = match addr {
             0x8000..=0xBFFF => (
@@ -724,9 +814,12 @@ impl Mapper for UxromMapper {
         };
         physical_bank_8k(self.prg_rom.len(), 16 * 1024, bank, offset)
     }
+    // Keep the fixed header mirroring for this variant implementation.
     fn nametable_mirroring(&self) -> NametableMirroring {
         fixed_nametable_mirroring(self.mirroring)
     }
+    // Read the selectable and fixed 16 KiB halves through wrapped ROM-bank
+    // access; this implementation provides no PRG RAM below $8000.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -759,6 +852,8 @@ impl Mapper for UxromMapper {
             _ => 0,
         }
     }
+    // Decode the variant's bank bits on writes at $8000+ and optionally trace
+    // the new selection. ROM bus-conflict masking is not modeled here.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -782,15 +877,19 @@ impl Mapper for UxromMapper {
             );
         }
     }
+    // Read the unbanked CHR backing with address wrapping.
     fn read_chr(&mut self, addr: u16) -> u8 {
         self.chr[(addr as usize) % self.chr.len()]
     }
+    // Allow unbanked pattern writes only when the backing is CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let len = self.chr.len();
             self.chr[(addr as usize) % len] = value;
         }
     }
+    // Describe the two logical 16 KiB PRG selections and fixed CHR/mirroring.
+    // The selected register value may wrap when actual ROM bytes are read.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper_id,
@@ -813,12 +912,16 @@ impl Mapper for UxromMapper {
             false,
         )
     }
+    // Store the bank register followed by CHR backing; variant configuration
+    // remains owned by the loaded mapper.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![self.bank_select];
         v.extend_from_slice(&self.chr);
         v
     }
 
+    // Validate the total length, then restore bank selection and CHR bytes.
+    // This payload contains no separate variant/configuration signature.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         let expected_len = 1 + self.chr.len();
         if bytes.len() != expected_len {
@@ -853,6 +956,8 @@ pub struct Vrc3Mapper {
 }
 
 impl Vrc3Mapper {
+    // Allocate PRG/CHR backing and start with bank zero and disabled, cleared
+    // IRQ state; mirroring stays fixed by the header.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         Self {
@@ -870,6 +975,7 @@ impl Vrc3Mapper {
         }
     }
 
+    // Choose the modeled 8-bit or 16-bit overflow threshold from control bit 2.
     fn irq_limit(&self) -> u32 {
         if self.irq_control & 0x04 != 0 {
             0x100
@@ -878,6 +984,9 @@ impl Vrc3Mapper {
         }
     }
 
+    // Assemble the latch from four low-nibble writes. Control writes clear
+    // pending IRQ and optionally reload the counter; acknowledgement restores
+    // the enable state selected by control bit zero.
     fn write_irq_register(&mut self, addr: u16, value: u8) {
         match addr & 0xF000 {
             0x8000 => self.irq_latch = (self.irq_latch & 0xFFF0) | (value as u16 & 0x000F),
@@ -902,12 +1011,16 @@ impl Vrc3Mapper {
 }
 
 impl Mapper for Vrc3Mapper {
+    // Identify the dedicated VRC3 register layout as mapper 73.
     fn mapper_id(&self) -> u16 {
         73
     }
+    // Return the VRC3 family label.
     fn mapper_name(&self) -> &'static str {
         "Konami VRC3"
     }
+    // Resolve the selectable lower or fixed final upper 16 KiB PRG window
+    // to a physical 8 KiB bank; PRG RAM has no ROM bank label.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         let (bank, offset) = match addr {
             0x8000..=0xBFFF => (self.prg_bank as usize, addr as usize - 0x8000),
@@ -919,9 +1032,12 @@ impl Mapper for Vrc3Mapper {
         };
         physical_bank_8k(self.prg_rom.len(), 16 * 1024, bank, offset)
     }
+    // Keep the fixed header nametable policy.
     fn nametable_mirroring(&self) -> NametableMirroring {
         fixed_nametable_mirroring(self.mirroring)
     }
+    // Read physical PRG RAM at $6000-$7FFF, selected ROM below $C000 and
+    // the final 16 KiB ROM bank above it; unmapped addresses return zero.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -947,6 +1063,8 @@ impl Mapper for Vrc3Mapper {
             _ => 0,
         }
     }
+    // Route RAM writes, IRQ latch/control writes and the $F000 PRG selector.
+    // Optional register tracing also records ignored $E000-range writes.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -981,15 +1099,20 @@ impl Mapper for Vrc3Mapper {
             );
         }
     }
+    // Read the unbanked CHR backing with modulo address wrapping.
     fn read_chr(&mut self, addr: u16) -> u8 {
         self.chr[addr as usize % self.chr.len()]
     }
+    // Store a pattern byte only in writable CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let len = self.chr.len();
             self.chr[addr as usize % len] = value;
         }
     }
+    // Add the supplied CPU-cycle chunk while enabled, wrap at the selected
+    // threshold and latch IRQ on overflow. This model wraps the counter rather
+    // than reloading the programmed latch after overflow.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -1002,6 +1125,8 @@ impl Mapper for Vrc3Mapper {
             return;
         }
         let limit = self.irq_limit();
+        // The emulator supplies small instruction-sized chunks. This cast is
+        // not an arbitrary-u64 bulk-clock implementation.
         let next = self.irq_counter as u32 + cpu_cycles as u32;
         if next >= limit {
             self.irq_counter = (next % limit) as u16;
@@ -1015,12 +1140,16 @@ impl Mapper for Vrc3Mapper {
             self.irq_counter = next as u16;
         }
     }
+    // Expose the latched mapper IRQ request.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear pending IRQ without changing the counter or enable state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Report logical PRG selections, fixed CHR/mirroring and IRQ state,
+    // including counter/latch values in the diagnostic name.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             73,
@@ -1038,6 +1167,8 @@ impl Mapper for Vrc3Mapper {
             self.irq_pending(),
         )
     }
+    // Serialize PRG selection, IRQ flags/control and little-endian latch/
+    // counter, then append PRG RAM and CHR backing in fixed order.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![
             self.prg_bank,
@@ -1051,6 +1182,8 @@ impl Mapper for Vrc3Mapper {
         bytes.extend_from_slice(&self.chr);
         bytes
     }
+    // Validate total length before decoding all register fields and copying
+    // backing data; any nonzero serialized boolean is treated as true.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         let expected = 8 + self.prg_ram.len() + self.chr.len();
         if bytes.len() != expected {
@@ -1080,6 +1213,8 @@ pub struct CnromMapper {
     chr_bank: u8,
 }
 impl CnromMapper {
+    // Start with CHR bank zero and fixed PRG/mirroring. Missing CHR receives
+    // zeroed backing, but this implementation still ignores CHR writes.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         let (chr, _) = ensure_chr(chr_rom);
         Self {
@@ -1091,12 +1226,16 @@ impl CnromMapper {
     }
 }
 impl Mapper for CnromMapper {
+    // Identify the CHR-switching CNROM implementation as mapper 3.
     fn mapper_id(&self) -> u16 {
         3
     }
+    // Return the CNROM board-family label.
     fn mapper_name(&self) -> &'static str {
         "CNROM"
     }
+    // Label fixed/mirrored PRG ROM in shared 8 KiB units independently of
+    // the currently selected CHR bank.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -1108,9 +1247,12 @@ impl Mapper for CnromMapper {
         };
         physical_bank_8k(self.prg_rom.len(), bank_size, 0, addr as usize - 0x8000)
     }
+    // Translate the fixed header mirroring policy.
     fn nametable_mirroring(&self) -> NametableMirroring {
         fixed_nametable_mirroring(self.mirroring)
     }
+    // Read fixed 32 KiB or mirrored 16 KiB PRG ROM; direct indexing assumes
+    // valid backing of that size, and addresses below $8000 return zero.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -1130,6 +1272,8 @@ impl Mapper for CnromMapper {
             0
         }
     }
+    // Use the low two data bits to select an 8 KiB CHR bank on $8000+ writes,
+    // without applying ROM bus-conflict masking.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1153,10 +1297,14 @@ impl Mapper for CnromMapper {
             );
         }
     }
+    // Read the selected 8 KiB CHR bank with wrapped backing access.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(&self.chr, 8 * 1024, self.chr_bank as usize, addr as usize)
     }
+    // Ignore pattern writes because CNROM CHR is treated as read-only.
     fn write_chr(&mut self, _addr: u16, _value: u8) {}
+    // Describe fixed 16 KiB PRG slots, the CHR bank register and header
+    // mirroring without a mapper IRQ.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             3,
@@ -1172,6 +1320,8 @@ impl Mapper for CnromMapper {
             false,
         )
     }
+    // Record only the CHR selector. This implementation inherits the
+    // default restore rejection despite exposing snapshot bytes.
     fn snapshot_bytes(&self) -> Vec<u8> {
         vec![self.chr_bank]
     }
@@ -1198,6 +1348,8 @@ pub struct SimpleBankMapper {
 }
 
 impl SimpleBankMapper {
+    // Start PRG/CHR selectors at zero and allocate fallback CHR RAM; CPROM
+    // expands that RAM to 16 KiB for its separate 4 KiB windows.
     fn new(kind: SimpleBankKind, prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         let (mut chr, chr_ram) = ensure_chr(chr_rom);
         if kind == SimpleBankKind::Cprom && chr_ram {
@@ -1214,6 +1366,7 @@ impl SimpleBankMapper {
         }
     }
 
+    // Map the selected board kind to its cartridge mapper number.
     fn mapper_id(&self) -> u16 {
         match self.kind {
             SimpleBankKind::ColorDreams => 11,
@@ -1224,6 +1377,7 @@ impl SimpleBankMapper {
         }
     }
 
+    // Choose the diagnostic board-family name for the selected kind.
     fn name(&self) -> &'static str {
         match self.kind {
             SimpleBankKind::ColorDreams => "Color Dreams",
@@ -1234,6 +1388,7 @@ impl SimpleBankMapper {
         }
     }
 
+    // Use a 32 KiB PRG selection unit for every currently supported kind.
     fn prg_bank_size(&self) -> usize {
         match self.kind {
             SimpleBankKind::ColorDreams
@@ -1246,14 +1401,18 @@ impl SimpleBankMapper {
 }
 
 impl Mapper for SimpleBankMapper {
+    // Delegate to the inherent board-kind-to-ID lookup.
     fn mapper_id(&self) -> u16 {
         self.mapper_id()
     }
 
+    // Delegate to the board-kind name lookup.
     fn mapper_name(&self) -> &'static str {
         self.name()
     }
 
+    // Convert the selected 32 KiB PRG window into a physical 8 KiB label
+    // for ROM addresses only.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -1266,10 +1425,13 @@ impl Mapper for SimpleBankMapper {
         )
     }
 
+    // Retain the fixed header nametable policy.
     fn nametable_mirroring(&self) -> NametableMirroring {
         fixed_nametable_mirroring(self.mirroring)
     }
 
+    // Read the selected wrapped 32 KiB PRG bank above $8000; no CPU RAM or
+    // expansion-register readback is provided by this implementation.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -1289,6 +1451,9 @@ impl Mapper for SimpleBankMapper {
         )
     }
 
+    // Decode PRG/CHR fields by board kind and trace the resulting selectors.
+    // NINA additionally accepts every address in $4100-$5FFF; this decoder
+    // also accepts its writes at $8000+.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1341,6 +1506,9 @@ impl Mapper for SimpleBankMapper {
         );
     }
 
+    // Use fixed CHR for BNROM or selected 8 KiB banks for the other kinds.
+    // CPROM fixes its lower 4 KiB to bank zero and maps the upper half to
+    // selector+1 in this implementation.
     fn read_chr(&mut self, addr: u16) -> u8 {
         let chr_bank = match self.kind {
             SimpleBankKind::Bnrom | SimpleBankKind::Cprom => 0,
@@ -1360,6 +1528,8 @@ impl Mapper for SimpleBankMapper {
         }
     }
 
+    // Ignore writes to CHR ROM; for RAM, mirror the same bank/window mapping
+    // used by reads, including CPROM's split 4 KiB halves.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if !self.chr_ram {
             return;
@@ -1382,6 +1552,8 @@ impl Mapper for SimpleBankMapper {
         }
     }
 
+    // Report selector registers and fixed mirroring. CPROM's single CHR
+    // selector summary does not enumerate both effective 4 KiB windows.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper_id(),
@@ -1394,6 +1566,8 @@ impl Mapper for SimpleBankMapper {
         )
     }
 
+    // Save both selectors, kind and mirroring codes followed by CHR backing
+    // so restore can reject a different board configuration.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![
             self.prg_bank,
@@ -1405,6 +1579,8 @@ impl Mapper for SimpleBankMapper {
         bytes
     }
 
+    // Check length, board kind and mirroring before restoring selectors
+    // and CHR data; configuration mismatch leaves existing state untouched.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         let header_len = 4;
         let expected_len = header_len + self.chr.len();
@@ -1435,6 +1611,8 @@ pub struct AxromMapper {
     single_screen_high: bool,
 }
 impl AxromMapper {
+    // Start on 32 KiB PRG bank zero with the single-screen selector clear
+    // and supplied CHR ROM or fallback CHR RAM.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         Self {
@@ -1447,12 +1625,16 @@ impl AxromMapper {
     }
 }
 impl Mapper for AxromMapper {
+    // Identify the AxROM implementation as mapper 7.
     fn mapper_id(&self) -> u16 {
         7
     }
+    // Return the AxROM board-family label.
     fn mapper_name(&self) -> &'static str {
         "AxROM"
     }
+    // Convert the selected 32 KiB PRG window into the physical 8 KiB bank
+    // visible at a CPU ROM address.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -1464,6 +1646,7 @@ impl Mapper for AxromMapper {
             addr as usize - 0x8000,
         )
     }
+    // Read the selected wrapped 32 KiB ROM bank, returning zero below $8000.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -1483,6 +1666,9 @@ impl Mapper for AxromMapper {
             0
         }
     }
+    // Latch PRG bits 0-2 and the single-screen selector in bit 4, then trace
+    // the selection. The selector is stored/reported here, but this type has
+    // no nametable_mirroring override and uses the trait's four-screen fallback.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1510,15 +1696,19 @@ impl Mapper for AxromMapper {
             );
         }
     }
+    // Read the unbanked CHR backing with address wrapping.
     fn read_chr(&mut self, addr: u16) -> u8 {
         self.chr[(addr as usize) % self.chr.len()]
     }
+    // Allow pattern writes only when CHR RAM was allocated.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let len = self.chr.len();
             self.chr[(addr as usize) % len] = value;
         }
     }
+    // Report the stored single-screen selector and PRG bank. The mirroring
+    // text describes the register; it does not itself drive PPU mirroring.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             7,
@@ -1535,6 +1725,8 @@ impl Mapper for AxromMapper {
             false,
         )
     }
+    // Serialize the PRG/screen selectors and CHR backing. Restore remains
+    // unsupported through the inherited default method.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![self.bank_select, self.single_screen_high as u8];
         v.extend_from_slice(&self.chr);
@@ -1564,6 +1756,8 @@ pub struct Mmc1Mapper {
 }
 
 impl Mmc1Mapper {
+    // Construct generic SxROM with 8 KiB PRG/CHR RAM defaults and submapper
+    // zero; explicit SUROM selection uses new_with_config.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring, battery: bool) -> Self {
         Self::new_with_config(
             prg_rom,
@@ -1579,6 +1773,9 @@ impl Mmc1Mapper {
         )
     }
 
+    // Allocate configured backing and initialize the serial register to
+    // $10 with control $0C. PRG RAM has at least one byte; a zero CHR-RAM
+    // size retains the 8 KiB fallback allocated by ensure_chr.
     pub fn new_with_config(
         prg_rom: Vec<u8>,
         chr_rom: Vec<u8>,
@@ -1610,6 +1807,9 @@ impl Mmc1Mapper {
         }
     }
 
+    // Commit five serial bits to the register chosen by the final write
+    // address. CHR/control changes rearm mismatch reporting; PRG bit 4 gates
+    // CPU access to work RAM.
     fn commit(&mut self, addr: u16, data: u8) -> &'static str {
         match addr {
             0x8000..=0x9FFF => {
@@ -1636,6 +1836,7 @@ impl Mmc1Mapper {
         }
     }
 
+    // Return the configured generic or SUROM profile name.
     fn board_profile(&self) -> &'static str {
         match self.board_variant {
             Mmc1BoardVariant::GenericSxrom => "generic_sxrom",
@@ -1643,6 +1844,8 @@ impl Mmc1Mapper {
         }
     }
 
+    // Use CHR0 bit 4 as SUROM's outer 256 KiB selector; generic SxROM stays
+    // in outer half zero regardless of CHR register values.
     fn outer_prg_bank(&self) -> usize {
         if self.board_variant != Mmc1BoardVariant::Surom512 {
             return 0;
@@ -1650,15 +1853,22 @@ impl Mmc1Mapper {
         ((self.chr_bank0 >> 4) & 1) as usize
     }
 
+    // Detect SUROM 4 KiB CHR mode with conflicting outer-bank bits in the
+    // two CHR registers; actual PRG selection still comes from CHR0.
     fn chr_outer_mismatch(&self) -> bool {
         self.board_variant == Mmc1BoardVariant::Surom512
             && self.control & 0x10 != 0
             && ((self.chr_bank0 ^ self.chr_bank1) & 0x10) != 0
     }
 
+    // Select the two logical 16 KiB PRG banks from control mode and PRG bits.
+    // SUROM fixes first/last banks within the chosen 256 KiB half; generic
+    // SxROM fixes them within the complete PRG image.
     fn prg_window(&self) -> (usize, usize) {
         let count16 = bank_count(self.prg_rom.len(), 16 * 1024);
         if self.board_variant == Mmc1BoardVariant::Surom512 {
+            // Each SUROM outer half contains sixteen 16 KiB banks. Keep both fixed
+            // and switchable windows inside that half before backing-size wrapping.
             let outer_base = self.outer_prg_bank() * 16;
             let inner = (self.prg_bank & 0x0f) as usize;
             return match (self.control >> 2) & 0x03 {
@@ -1679,6 +1889,8 @@ impl Mmc1Mapper {
             _ => ((self.prg_bank as usize & 0x0f) % count16, count16 - 1),
         }
     }
+    // Describe the two logical 4 KiB CHR selections, pairing even/odd banks
+    // in 8 KiB mode. Backing-size wrapping happens during reads and writes.
     fn chr_window(&self) -> Vec<u16> {
         if self.control & 0x10 == 0 {
             vec![(self.chr_bank0 & !1) as u16, (self.chr_bank0 | 1) as u16]
@@ -1686,6 +1898,7 @@ impl Mmc1Mapper {
             vec![self.chr_bank0 as u16, self.chr_bank1 as u16]
         }
     }
+    // Name the current two-bit control-register nametable policy.
     fn effective_mirroring(&self) -> String {
         match self.control & 0x03 {
             0 => "single_screen_low".to_string(),
@@ -1695,6 +1908,8 @@ impl Mmc1Mapper {
         }
     }
 
+    // Capture board, register, bank-mode and RAM-enable metadata for an
+    // MMC1 event; PRG window values here are 16 KiB bank indices.
     fn trace_details(&self, register: Option<&str>) -> BTreeMap<String, Value> {
         let (lo, hi) = self.prg_window();
         let mut details = BTreeMap::new();
@@ -1714,6 +1929,9 @@ impl Mmc1Mapper {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // Emit structured MMC1 metadata only with mapper tracing enabled,
+    // classifying ignored serial writes, unsafe CHR mode and disabled RAM
+    // access as warnings.
     fn trace_event(
         &self,
         kind: &str,
@@ -1748,18 +1966,26 @@ impl Mmc1Mapper {
 }
 
 impl Mapper for Mmc1Mapper {
+    // Expose the physical PRG-RAM slice even when CPU-window access is
+    // disabled; battery eligibility is checked by the cartridge layer.
     fn battery_prg_ram(&self) -> Option<&[u8]> {
         Some(&self.prg_ram)
     }
+    // Allow validated sidecar import into physical RAM without changing
+    // mapper registers or the CPU access-enable flag.
     fn battery_prg_ram_mut(&mut self) -> Option<&mut [u8]> {
         Some(&mut self.prg_ram)
     }
+    // Identify both generic SxROM and SUROM variants as mapper 1.
     fn mapper_id(&self) -> u16 {
         1
     }
+    // Return the shared MMC1 family name; debug state adds the board profile.
     fn mapper_name(&self) -> &'static str {
         "MMC1/SxROM"
     }
+    // Resolve the selected lower/upper 16 KiB windows into wrapped physical
+    // 8 KiB bank indices, with no ROM label for the PRG-RAM window.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         let (low, high) = self.prg_window();
         let (bank, offset) = match addr {
@@ -1769,6 +1995,8 @@ impl Mapper for Mmc1Mapper {
         };
         physical_bank_8k(self.prg_rom.len(), 16 * 1024, bank, offset)
     }
+    // Drive runtime nametable mirroring from control bits 0-1 rather than
+    // the retained cartridge header field.
     fn nametable_mirroring(&self) -> NametableMirroring {
         match self.control & 0x03 {
             0 => NametableMirroring::SingleScreenLow,
@@ -1777,6 +2005,8 @@ impl Mapper for Mmc1Mapper {
             _ => NametableMirroring::Horizontal,
         }
     }
+    // Return $FF and optionally warn for disabled CPU PRG-RAM reads; otherwise
+    // read wrapped RAM or the selected lower/upper ROM window.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -1815,6 +2045,9 @@ impl Mapper for Mmc1Mapper {
             _ => 0,
         }
     }
+    // Handle gated RAM writes and the five-bit MMC1 serial protocol. Reset
+    // bit writes bypass consecutive-cycle suppression; accepted serial writes
+    // shift LSB first and commit according to the fifth write's address.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1845,6 +2078,8 @@ impl Mapper for Mmc1Mapper {
             }
             0x8000..=0xFFFF => {
                 if value & 0x80 != 0 {
+                    // Reset the serial sentinel and force the fixed-upper PRG mode without
+                    // clearing CHR/PRG registers or changing the existing RAM-enable flag.
                     self.shift = 0x10;
                     self.control |= 0x0C;
                     self.last_mapper_write_cycle = Some(cycle);
@@ -1879,6 +2114,8 @@ impl Mapper for Mmc1Mapper {
                         return;
                     }
                     self.last_mapper_write_cycle = Some(cycle);
+                    // The low sentinel reaches bit zero before the fifth accepted bit.
+                    // Ignored adjacent-cycle writes do not advance this shift state.
                     let complete = self.shift & 1 != 0;
                     self.shift = (self.shift >> 1) | ((value & 1) << 4);
                     self.trace_event(
@@ -1896,6 +2133,8 @@ impl Mapper for Mmc1Mapper {
                         let data = self.shift & 0x1F;
                         let old_outer = self.outer_prg_bank();
                         let old_prg_ram_enabled = self.prg_ram_enabled;
+                        // Use the completing write's address to choose the destination register;
+                        // earlier serial-bit writes need not share that address range.
                         let register = self.commit(addr, data);
                         self.shift = 0x10;
                         let (lo, hi) = self.prg_window();
@@ -1956,6 +2195,8 @@ impl Mapper for Mmc1Mapper {
             _ => {}
         }
     }
+    // Read one selected 8 KiB CHR bank or two independent 4 KiB banks according
+    // to control bit 4, wrapping bank indices to the available backing.
     fn read_chr(&mut self, addr: u16) -> u8 {
         if self.control & 0x10 == 0 {
             read_bank(
@@ -1975,6 +2216,7 @@ impl Mapper for Mmc1Mapper {
             )
         }
     }
+    // Use the same CHR bank/mode mapping as reads, but modify only RAM backing.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if !self.chr_ram {
             return;
@@ -2005,6 +2247,9 @@ impl Mapper for Mmc1Mapper {
             );
         }
     }
+    // Remember the PPU address and consume the one-shot unsafe-SUROM warning
+    // when mismatch is first seen. The reported flag is set even if tracing
+    // is disabled, until a control/CHR commit rearms it.
     fn notify_ppu_addr(
         &mut self,
         addr: u16,
@@ -2029,6 +2274,9 @@ impl Mapper for Mmc1Mapper {
             );
         }
     }
+    // Expose register values, logical PRG/CHR windows and RAM enable state.
+    // The profile-source label is chosen from the variant, not tracked from
+    // the caller's actual configuration provenance.
     fn debug_state(&self) -> MapperDebugState {
         let (lo, hi) = self.prg_window();
         let mut state = mapper_debug_state(
@@ -2064,6 +2312,8 @@ impl Mapper for Mmc1Mapper {
         state.mmc1_prg_bank = Some(self.prg_bank);
         state
     }
+    // Serialize the 21-byte register/configuration header, physical PRG RAM
+    // and CHR backing. u64::MAX represents an absent last-write cycle.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.shift,
@@ -2092,6 +2342,9 @@ impl Mapper for Mmc1Mapper {
         v.extend_from_slice(&self.chr);
         v
     }
+    // Validate payload size and cartridge mirroring/battery/board/submapper
+    // before restoring mutable state. RAM-enable and register fields are
+    // restored as serialized rather than recomputed from one another.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         const HEADER_LEN: usize = 21;
         let expected_len = HEADER_LEN + self.prg_ram.len() + self.chr.len();
@@ -2138,6 +2391,9 @@ impl Mapper for Mmc1Mapper {
         Ok(())
     }
 
+    // Require equal backing lengths, header mirroring, battery and submapper;
+    // accept a known source board variant and replace only that tag with the
+    // target variant before delegating to strict restore.
     fn restore_rebased_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         const HEADER_LEN: usize = 21;
         let expected_len = HEADER_LEN + self.prg_ram.len() + self.chr.len();
@@ -2162,6 +2418,8 @@ impl Mapper for Mmc1Mapper {
             ));
         }
 
+        // Adapt a temporary payload so failed compatibility checks cannot mutate
+        // source bytes, and the loaded target retains its board configuration.
         let mut adapted = bytes.to_vec();
         adapted[7] = match self.board_variant {
             Mmc1BoardVariant::GenericSxrom => 0,
@@ -2170,6 +2428,9 @@ impl Mapper for Mmc1Mapper {
         self.restore_snapshot_bytes(&adapted)
     }
 
+    // Map the patch relative to $6000 with checked bounds against physical
+    // RAM and the 8 KiB window, then copy directly even when CPU RAM access
+    // is disabled. Mapper registers remain unchanged.
     fn patch_prg_ram_bytes(&mut self, cpu_address: u16, bytes: &[u8]) -> Result<()> {
         let start = usize::from(cpu_address.checked_sub(0x6000).ok_or_else(|| {
             KurosakiError::SnapshotFormat(format!(
@@ -2185,6 +2446,8 @@ impl Mapper for Mmc1Mapper {
                 bytes.len()
             )));
         }
+        // A zero-length slice at the one-past-window address may pass these
+        // end-based checks; it makes no change. Nonempty writes must fit entirely.
         self.prg_ram[start..end].copy_from_slice(bytes);
         Ok(())
     }
@@ -2205,6 +2468,8 @@ pub struct Mmc2Mmc4Mapper {
 }
 
 impl Mmc2Mmc4Mapper {
+    // Select MMC2 for mapper 9 and MMC4 otherwise, initialize all banks and
+    // latches to zero/FD, and retain the converted header mirroring policy.
     fn new(mapper_id: u16, prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         Self {
@@ -2225,6 +2490,8 @@ impl Mmc2Mmc4Mapper {
         }
     }
 
+    // Choose one of the two bank registers for each 4 KiB pattern half
+    // according to that half's FD/FE fetch latch.
     fn selected_chr_bank(&self, addr: u16) -> usize {
         (if addr < 0x1000 {
             if self.latch0_fe {
@@ -2241,14 +2508,19 @@ impl Mmc2Mmc4Mapper {
 }
 
 impl Mapper for Mmc2Mmc4Mapper {
+    // Return the configured MMC2/MMC4 mapper ID.
     fn mapper_id(&self) -> u16 {
         self.mapper_id
     }
 
+    // Return the family label selected by the constructor.
     fn mapper_name(&self) -> &'static str {
         self.name
     }
 
+    // For MMC2, resolve one selectable plus three final fixed 8 KiB banks.
+    // For MMC4, resolve selectable/final 16 KiB halves, then convert to the
+    // shared physical 8 KiB units.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if self.mapper_id == 9 {
             let bank = match addr {
@@ -2271,10 +2543,13 @@ impl Mapper for Mmc2Mmc4Mapper {
         physical_bank_8k(self.prg_rom.len(), 16 * 1024, bank, offset)
     }
 
+    // Expose the current runtime mirroring value updated by register writes.
     fn nametable_mirroring(&self) -> NametableMirroring {
         self.mirroring
     }
 
+    // Read mapper-specific selectable/fixed PRG windows with bank wrapping;
+    // this implementation returns zero below $8000 and has no PRG RAM there.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -2304,6 +2579,8 @@ impl Mapper for Mmc2Mmc4Mapper {
         }
     }
 
+    // Decode $A000-$EFFF into PRG and four CHR bank registers, and $F000+
+    // into vertical/horizontal mirroring, then optionally trace the write.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -2343,6 +2620,8 @@ impl Mapper for Mmc2Mmc4Mapper {
         );
     }
 
+    // Read the 4 KiB bank chosen by the current fetch latch; this method
+    // itself does not update latches.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -2352,6 +2631,7 @@ impl Mapper for Mmc2Mmc4Mapper {
         )
     }
 
+    // Write through the current latch-selected 4 KiB window only for CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let bank = self.selected_chr_bank(addr);
@@ -2359,6 +2639,8 @@ impl Mapper for Mmc2Mmc4Mapper {
         }
     }
 
+    // Mask the low three address bits and switch the matching FD/FE latch.
+    // Both mapper variants use this same eight-address trigger grouping.
     fn notify_ppu_addr(
         &mut self,
         addr: u16,
@@ -2376,6 +2658,8 @@ impl Mapper for Mmc2Mmc4Mapper {
         }
     }
 
+    // Report the PRG selector, all four CHR registers and current mirroring.
+    // This register summary does not enumerate the effective latched windows.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper_id,
@@ -2395,6 +2679,8 @@ impl Mapper for Mmc2Mmc4Mapper {
         )
     }
 
+    // Save the PRG/CHR selectors, latch flags and mirroring enum byte before
+    // CHR backing; mapper identity is held outside this private payload.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut bytes = vec![
             self.prg_bank,
@@ -2410,6 +2696,9 @@ impl Mapper for Mmc2Mmc4Mapper {
         bytes
     }
 
+    // Check total length, then restore selectors, flags, mirroring and CHR.
+    // Unknown mirroring byte values fall back to single-screen high; the
+    // payload carries no MMC2-versus-MMC4 configuration signature.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         let header_len = 8;
         let expected_len = header_len + self.chr.len();
@@ -2461,9 +2750,13 @@ pub struct Mmc3Mapper {
 }
 
 impl Mmc3Mapper {
+    // Construct the standard mapper-4 variant with the supplied backing
+    // and header metadata.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring, battery: bool) -> Self {
         Self::new_variant(4, prg_rom, chr_rom, mirroring, battery)
     }
+    // Select the mapper-118/119 behavior flags, allocate PRG RAM and separate
+    // variant CHR RAM, then clear bank selectors, IRQ state and A12 history.
     pub fn new_variant(
         mapper_id: u16,
         prg_rom: Vec<u8>,
@@ -2499,6 +2792,9 @@ impl Mmc3Mapper {
             irq_clock_count: 0,
         }
     }
+    // Build four physical 8 KiB PRG slots from registers 6/7 and the last
+    // two banks. Control bit 6 exchanges the selected and fixed slots at
+    // $8000/$C000 while the final slot stays fixed.
     fn prg_windows(&self) -> [usize; 4] {
         let count = bank_count(self.prg_rom.len(), 8 * 1024);
         let last = count - 1;
@@ -2511,9 +2807,14 @@ impl Mmc3Mapper {
             [second_last, r7, r6, last]
         }
     }
+    // Return the six raw CHR bank registers for debug output; these are
+    // not the eight effective 1 KiB slots after mode/pair expansion.
     fn chr_windows(&self) -> Vec<u16> {
         self.bank_regs.iter().take(6).map(|v| *v as u16).collect()
     }
+    // Expand the two paired 2 KiB and four single 1 KiB CHR selections,
+    // exchanging pattern-table halves in inverted mode. Mapper 119 bank
+    // bit 6 chooses its separate CHR RAM backing.
     fn chr_bank_for_addr(&self, addr: u16) -> (usize, bool) {
         let chr_mode = self.bank_select & 0x80 != 0;
         let a = addr as usize;
@@ -2538,6 +2839,9 @@ impl Mmc3Mapper {
         };
         (bank, self.variant == 2 && (bank & 0x40) != 0)
     }
+    // Decode mirrored even/odd register addresses for bank selection,
+    // mirroring, RAM protection and IRQ control. RAM protection is latched
+    // here but not applied by the current CPU RAM read/write paths.
     fn write_register(&mut self, addr: u16, value: u8) {
         match (addr & 0xE001, addr & 1) {
             (0x8000, 0) => self.bank_select = value,
@@ -2561,6 +2865,9 @@ impl Mmc3Mapper {
         }
     }
 
+    // Count a filtered A12 event, reload a zero/reload-requested counter or
+    // decrement it, then latch IRQ if the resulting value is zero and enabled.
+    // Trace counter clocks separately from the asserted interrupt.
     fn clock_irq_counter(
         &mut self,
         frame: u64,
@@ -2569,6 +2876,8 @@ impl Mmc3Mapper {
         sink: &mut TraceSink,
     ) {
         self.irq_clock_count = self.irq_clock_count.saturating_add(1);
+        // Reload before testing the resulting value, so a zero latch can assert
+        // IRQ on this clock when enabled.
         if self.irq_counter == 0 || self.irq_reload {
             self.irq_counter = self.irq_latch;
             self.irq_reload = false;
@@ -2597,15 +2906,20 @@ impl Mmc3Mapper {
 }
 
 impl Mapper for Mmc3Mapper {
+    // Expose physical PRG RAM for cartridge-validated sidecar export.
     fn battery_prg_ram(&self) -> Option<&[u8]> {
         Some(&self.prg_ram)
     }
+    // Expose writable physical PRG RAM for sidecar import without register
+    // changes or CPU-window accesses.
     fn battery_prg_ram_mut(&mut self) -> Option<&mut [u8]> {
         Some(&mut self.prg_ram)
     }
+    // Return the configured standard or 118/119 variant ID.
     fn mapper_id(&self) -> u16 {
         self.mapper_id
     }
+    // Choose the corresponding variant family label for diagnostics.
     fn mapper_name(&self) -> &'static str {
         match self.mapper_id {
             118 => "TLSROM/TKSROM",
@@ -2613,6 +2927,8 @@ impl Mapper for Mmc3Mapper {
             _ => "MMC3/MMC6",
         }
     }
+    // Select the CPU address's 8 KiB slot and resolve its physical ROM bank,
+    // returning no ROM-bank label outside $8000-$FFFF.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -2625,6 +2941,8 @@ impl Mapper for Mmc3Mapper {
             addr as usize & 0x1FFF,
         )
     }
+    // Read physical PRG RAM or one of four selected ROM slots. The stored
+    // RAM-protection byte does not gate reads in this implementation.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -2662,6 +2980,8 @@ impl Mapper for Mmc3Mapper {
             _ => 0,
         }
     }
+    // Write PRG RAM directly or dispatch bank/control writes and optionally
+    // trace the resulting state. RAM-protection bits are not enforced here.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -2697,6 +3017,8 @@ impl Mapper for Mmc3Mapper {
             _ => {}
         }
     }
+    // Read the selected 1 KiB bank; mapper 119 strips its RAM-selection bit
+    // from the physical index and chooses normal or variant backing.
     fn read_chr(&mut self, addr: u16) -> u8 {
         let a = addr as usize;
         let (bank_1k, ram) = self.chr_bank_for_addr(addr);
@@ -2711,6 +3033,9 @@ impl Mapper for Mmc3Mapper {
             read_bank(&self.chr, 1024, physical_bank, a % 1024)
         }
     }
+    // Bank variant CHR-RAM writes using the selected 1 KiB index. Ordinary
+    // CHR-RAM writes currently use the raw PPU address modulo backing length,
+    // rather than the bank-selected mapping used by reads.
     fn write_chr(&mut self, addr: u16, value: u8) {
         let (bank, variant_ram) = self.chr_bank_for_addr(addr);
         if variant_ram {
@@ -2723,6 +3048,9 @@ impl Mapper for Mmc3Mapper {
             self.chr[a % len] = value;
         }
     }
+    // Filter rising A12 using counts of supplied low-address notifications,
+    // not elapsed PPU dots. At least two low notifications qualify an edge;
+    // the low count resets after a qualifying clock.
     fn notify_ppu_addr(
         &mut self,
         addr: u16,
@@ -2743,6 +3071,9 @@ impl Mapper for Mmc3Mapper {
         }
         self.last_ppu_a12 = a12;
     }
+    // For mapper 118, approximate nametable routing with CHR register zero
+    // bit 6 choosing vertical/horizontal. Other variants use the current
+    // mirroring field updated by $A000 writes.
     fn nametable_mirroring(&self) -> NametableMirroring {
         if self.variant == 1 {
             // TLSROM/TKSROM route CHR A17 to the nametable select line.
@@ -2755,12 +3086,16 @@ impl Mapper for Mmc3Mapper {
             fixed_nametable_mirroring(self.mirroring)
         }
     }
+    // Return the latched mapper interrupt request.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear only the pending request, preserving enable/reload/counter state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Report effective PRG slots, raw CHR registers, current mirroring and
+    // IRQ state; the diagnostic name also includes the A12 clock count.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper_id,
@@ -2783,6 +3118,9 @@ impl Mapper for Mmc3Mapper {
             self.irq_pending(),
         )
     }
+    // Serialize register/IRQ/A12 fields, configuration tags, clock count,
+    // bank registers and all backing slices. The mutable mirroring field
+    // is not included in this private payload.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.bank_select,
@@ -2805,7 +3143,13 @@ impl Mapper for Mmc3Mapper {
         v.extend_from_slice(&self.variant_chr_ram);
         v
     }
+    // Validate total length, then restore registers, IRQ/A12 state and
+    // backing bytes. Serialized battery/mapper/variant tags are skipped, and
+    // the loaded mapper's current mirroring remains unchanged.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        // The fixed 28-byte prefix comprises twelve scalar bytes, an eight-byte
+        // clock count and eight bank registers; slice lengths come from the
+        // already constructed mapper.
         let header = 12 + 8 + 8;
         let expected = header + self.prg_ram.len() + self.chr.len() + self.variant_chr_ram.len();
         if bytes.len() != expected {
@@ -2851,6 +3195,8 @@ struct FdsEnvelopeUnit {
 }
 
 impl FdsEnvelopeUnit {
+    // Initialize a silent direct-mode envelope with a caller-selected gain
+    // ceiling and no fractional clock remainder.
     fn new(max_gain: u8) -> Self {
         Self {
             control: 0x80,
@@ -2860,6 +3206,8 @@ impl FdsEnvelopeUnit {
         }
     }
 
+    // Restart the divider and select direct gain, an increasing envelope
+    // from zero, or a decreasing envelope from its configured ceiling.
     fn write_control(&mut self, value: u8) {
         self.control = value;
         self.divider = 0.0;
@@ -2873,22 +3221,30 @@ impl FdsEnvelopeUnit {
         }
     }
 
+    // Test control bit 7 for fixed gain instead of envelope clocking.
     fn direct_mode(&self) -> bool {
         self.control & 0x80 != 0
     }
 
+    // Test control bit 6 for upward envelope steps.
     fn increase_mode(&self) -> bool {
         self.control & 0x40 != 0
     }
 
+    // Clamp exposed gain to the unit's configured maximum.
     fn output(&self) -> u8 {
         self.gain.min(self.max_gain)
     }
 
+    // Accumulate fractional envelope steps per output sample from the local
+    // and master divisors. Halt/direct mode freezes the divider; gain stops
+    // at zero or its ceiling while clock remainders continue advancing.
     fn clock(&mut self, sample_rate: u32, master_speed: u8, halted: bool) {
         if halted || self.direct_mode() {
             return;
         }
+        // Add one to both speed fields and clamp the sample rate denominator
+        // to at least one, keeping zero-valued registers well-defined.
         let local = (self.control & 0x3F) as f64 + 1.0;
         let master = master_speed as f64 + 1.0;
         let clocks_per_second = CPU_HZ_NTSC / (FDS_ENV_CLOCK_DIVIDER * local * master);
@@ -2905,6 +3261,8 @@ impl FdsEnvelopeUnit {
         }
     }
 
+    // Append control, gain, little-endian fractional divider and gain ceiling
+    // in the private audio-state serialization order.
     fn snapshot_bytes(&self, out: &mut Vec<u8>) {
         out.push(self.control);
         out.push(self.gain);
@@ -2939,6 +3297,8 @@ struct FdsAudioState {
 }
 
 impl Default for FdsAudioState {
+    // Initialize a neutral midpoint waveform, zero modulation table and
+    // halted oscillators/envelopes, with volume/modulation ceilings of 32/63.
     fn default() -> Self {
         Self {
             // FDS BIOS/game code normally writes a 64-sample waveform before enabling audio.
@@ -2969,6 +3329,8 @@ impl Default for FdsAudioState {
 }
 
 impl FdsAudioState {
+    // Expose the modeled waveform, control/frequency shadows and envelope
+    // outputs without advancing audio time; unused addresses return zero.
     fn read(&self, addr: u16) -> u8 {
         match addr {
             0x4040..=0x407F => self.wave_ram[(addr - 0x4040) as usize] & 0x3F,
@@ -2998,6 +3360,9 @@ impl FdsAudioState {
         }
     }
 
+    // Count each routed write, update waveform/control shadows and reset
+    // phases where modeled. Wave samples require write enable; modulation
+    // table writes require modulation halt or wave-write enable.
     fn write(&mut self, addr: u16, value: u8) {
         self.audio_writes = self.audio_writes.saturating_add(1);
         match addr {
@@ -3045,6 +3410,8 @@ impl FdsAudioState {
                 }
             }
             0x4088 => {
+                // This model accepts modulation table programming while either gate
+                // is set and advances one table position per accepted write.
                 if self.mod_halt || self.wave_write_enable {
                     self.mod_table[self.mod_pos & 63] = value & 0x07;
                     self.mod_pos = (self.mod_pos + 1) & 63;
@@ -3059,6 +3426,8 @@ impl FdsAudioState {
         }
     }
 
+    // Advance each envelope once per requested output sample unless its
+    // oscillator halt or envelope halt flag freezes it.
     fn clock_envelopes(&mut self, sample_rate: u32) {
         let volume_halted = self.wave_halt || self.volume_env_halt;
         let mod_halted = self.mod_halt || self.mod_env_halt;
@@ -3068,6 +3437,9 @@ impl FdsAudioState {
             .clock(sample_rate, self.env_master_speed, mod_halted);
     }
 
+    // Advance the 64-entry modulation sequence from a fractional clock,
+    // adding signed table deltas and clamping the accumulator to -128..127.
+    // Table value 4 contributes zero in this approximation.
     fn clock_modulation(&mut self, sample_rate: u32) {
         if self.mod_halt || self.mod_freq == 0 {
             return;
@@ -3093,6 +3465,9 @@ impl FdsAudioState {
         }
     }
 
+    // Advance modulation and apply a bounded proportional pitch bend to
+    // the base frequency. This is a deterministic approximation rather than
+    // a bit-exact hardware modulation calculation.
     fn effective_frequency_hz(&mut self, sample_rate: u32) -> f64 {
         self.clock_modulation(sample_rate);
         let base = self.freq as f64 * CPU_HZ_NTSC / 65_536.0;
@@ -3108,11 +3483,16 @@ impl FdsAudioState {
         base * (1.0 + bend).clamp(0.45, 1.60)
     }
 
+    // Advance envelopes, then gate silent/halted output before moving wave
+    // and modulation phases. Sample the current 64-step waveform without
+    // interpolation and scale by envelope/master gain into an i16 contribution.
     fn sample(&mut self, sample_rate: u32) -> i16 {
         self.clock_envelopes(sample_rate);
         if self.wave_halt || self.freq == 0 {
             return 0;
         }
+        // A zero envelope returns before phase advancement. Wave-write enable
+        // controls RAM programming here but does not independently mute playback.
         let volume_units = self.volume_env.output().min(32);
         if volume_units == 0 {
             return 0;
@@ -3131,6 +3511,8 @@ impl FdsAudioState {
         (wave * volume * master * 90.0).clamp(i16::MIN as f64, i16::MAX as f64) as i16
     }
 
+    // Append waveform/modulation tables, register flags, fractional phases,
+    // envelope state and write count in a fixed private byte layout.
     fn snapshot_bytes(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.wave_ram);
         out.extend_from_slice(&self.mod_table);
@@ -3178,6 +3560,9 @@ pub struct FdsMapper {
     audio: FdsAudioState,
 }
 impl FdsMapper {
+    // Allocate 32 KiB PRG RAM and 8 KiB CHR RAM, normalize caller-supplied
+    // BIOS bytes, and start with no disk and disabled timers/transfer state.
+    // No external firmware is embedded by this constructor.
     pub fn new(prg_rom: Vec<u8>, _chr_rom: Vec<u8>) -> Self {
         Self {
             prg_ram: vec![0; 32 * 1024],
@@ -3201,6 +3586,9 @@ impl FdsMapper {
         }
     }
 
+    // Seed RAM from parsed disk boot files and redirect CPU vectors to the
+    // RAM vector copy, then retain the disk. This is a direct-boot path, not
+    // a BIOS-driven simulation of loading each file through disk registers.
     pub fn new_with_disk(bios_rom: Vec<u8>, disk: FdsDiskImage) -> Self {
         let mut mapper = Self::new(bios_rom, Vec::new());
         mapper.prg_ram = disk.boot_prg_ram();
@@ -3209,6 +3597,9 @@ impl FdsMapper {
         mapper.disk = Some(disk);
         mapper
     }
+    // Return modeled status/register shadows, clear IRQ on $4030 reads and
+    // advance a synthetic byte counter on $4031 reads. That counter byte is
+    // not fetched from the attached disk image.
     fn read_disk_reg(
         &mut self,
         addr: u16,
@@ -3226,6 +3617,8 @@ impl FdsMapper {
             0x4031 => {
                 self.disk_io_events = self.disk_io_events.saturating_add(1);
                 self.disk_byte_index = self.disk_byte_index.wrapping_add(1);
+                // Return the low byte after incrementing; the first synthetic data
+                // read is one and the sequence wraps every 256 reads.
                 (self.disk_byte_index & 0xFF) as u8
             }
             0x4032 => {
@@ -3250,6 +3643,9 @@ impl FdsMapper {
         }
         value
     }
+    // Store register shadows and update timer enable/repeat, IO enable and
+    // motor/transfer state. Starting the modeled motor schedules one 150-cycle
+    // transfer; the latched master-IO flag does not gate these accesses.
     fn write_disk_reg(
         &mut self,
         addr: u16,
@@ -3293,6 +3689,8 @@ impl FdsMapper {
         }
     }
 
+    // Read audio state and optionally trace frequency, envelopes and counters
+    // when mapper tracing is enabled.
     fn read_audio_reg(
         &mut self,
         addr: u16,
@@ -3320,6 +3718,8 @@ impl FdsMapper {
         value
     }
 
+    // Apply an audio write and emit detailed post-write state when either
+    // mapper or APU tracing is enabled.
     fn write_audio_reg(
         &mut self,
         addr: u16,
@@ -3356,12 +3756,18 @@ impl FdsMapper {
     }
 }
 impl Mapper for FdsMapper {
+    // Identify the FDS device implementation as mapper 20.
     fn mapper_id(&self) -> u16 {
         20
     }
+    // Label this implementation as a timing scaffold rather than a complete
+    // disk-controller emulation.
     fn mapper_name(&self) -> &'static str {
         "FDS timing scaffold"
     }
+    // Route disk/audio registers, 32 KiB RAM and BIOS reads. Direct boot
+    // redirects $FFFA-$FFFF to RAM at $DFFA-$DFFF before the BIOS case;
+    // firmware/RAM retain the trait's absent cartridge-ROM bank label.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -3382,6 +3788,8 @@ impl Mapper for FdsMapper {
             _ => 0,
         }
     }
+    // Route device-register writes and PRG-RAM stores; BIOS and other
+    // unmapped writes have no effect.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -3401,13 +3809,18 @@ impl Mapper for FdsMapper {
             _ => {}
         }
     }
+    // Read the flat CHR-RAM backing with modulo address wrapping.
     fn read_chr(&mut self, addr: u16) -> u8 {
         self.chr_ram[(addr as usize) % self.chr_ram.len()]
     }
+    // Write the flat CHR-RAM backing without bank selection.
     fn write_chr(&mut self, addr: u16, value: u8) {
         let len = self.chr_ram.len();
         self.chr_ram[(addr as usize) % len] = value;
     }
+    // Advance the timer and one pending transfer by the CPU-cycle chunk.
+    // A timer expiration latches IRQ and optionally reloads; leftover cycles
+    // beyond that expiration are not applied to a new repeat period.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -3416,6 +3829,8 @@ impl Mapper for FdsMapper {
         cfg: TraceConfig,
         sink: &mut TraceSink,
     ) {
+        // A zero timer counter does not enter this path, even when enabled.
+        // A repeating timer can therefore remain idle after a zero reload.
         if self.irq_enabled && self.irq_counter > 0 {
             let dec = cpu_cycles.min(self.irq_counter as u64) as u16;
             self.irq_counter -= dec;
@@ -3435,6 +3850,8 @@ impl Mapper for FdsMapper {
         }
         if self.transfer_busy {
             if cpu_cycles as u32 >= self.transfer_cycles_remaining {
+                // Complete this timing event once without streaming disk data or
+                // scheduling a subsequent byte; another register write must start a transfer.
                 self.transfer_busy = false;
                 self.disk_io_events = self.disk_io_events.saturating_add(1);
                 if cfg.mapper {
@@ -3450,15 +3867,21 @@ impl Mapper for FdsMapper {
             }
         }
     }
+    // Expose the pending FDS timer interrupt latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear pending IRQ without altering timer enable or counter values.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Advance the FDS audio model by one output sample and return its mixer
+    // contribution at the requested sample rate.
     fn expansion_audio_sample(&mut self, sample_rate: u32) -> i16 {
         self.audio.sample(sample_rate)
     }
+    // Report timing/audio counters and pending IRQ for this scaffold. The
+    // FDS debug label does not override the trait's four-screen nametable policy.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             20,
@@ -3481,6 +3904,9 @@ impl Mapper for FdsMapper {
             self.irq_pending(),
         )
     }
+    // Serialize device/audio state and append BIOS, RAM and optional raw
+    // disk bytes for state observation. This type has no restore decoder and
+    // inherits the default restore rejection.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.irq_enabled as u8,
@@ -3508,6 +3934,9 @@ impl Mapper for FdsMapper {
     }
 }
 
+// Produce exactly 8 KiB: keep the trailing BIOS-sized slice of long
+// input or right-align short input in zero padding. Empty input yields
+// zero backing, not functional replacement firmware.
 fn normalize_fds_bios(prg_rom: Vec<u8>) -> Vec<u8> {
     let mut bios = vec![0; 8 * 1024];
     if prg_rom.is_empty() {
@@ -3546,6 +3975,8 @@ pub struct GenericProbeMapper {
 }
 
 impl GenericProbeMapper {
+    // Load registry metadata, allocate probe RAM and CHR backing, and clear
+    // write-observation counters without selecting board-specific behavior.
     pub fn new(mapper: u16, prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         let spec = mapper_spec(mapper);
         let (chr, chr_ram) = ensure_chr(chr_rom);
@@ -3563,6 +3994,9 @@ impl GenericProbeMapper {
         }
     }
 
+    // Expose first/final 16 KiB PRG windows and an 8 KiB RAM window for
+    // inspection. Empty PRG backing short-circuits all reads, including RAM,
+    // to zero.
     fn fixed_prg_read(&self, addr: u16) -> u8 {
         if self.prg_rom.is_empty() {
             return 0;
@@ -3582,13 +4016,17 @@ impl GenericProbeMapper {
 }
 
 impl Mapper for GenericProbeMapper {
+    // Retain the input cartridge mapper number for inspection diagnostics.
     fn mapper_id(&self) -> u16 {
         self.mapper
     }
+    // Return an explicit probe-only implementation label.
     fn mapper_name(&self) -> &'static str {
         "Generic probe-only mapper"
     }
 
+    // Label the physical ROM bytes used by this fallback's fixed windows.
+    // These labels describe the probe mapping, not the actual board mapping.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         let (bank, offset) = match addr {
             0x8000..=0xBFFF => (0, addr as usize - 0x8000),
@@ -3601,6 +4039,8 @@ impl Mapper for GenericProbeMapper {
         physical_bank_8k(self.prg_rom.len(), 16 * 1024, bank, offset)
     }
 
+    // Read the fixed inspection mapping and optionally mark ROM reads as
+    // probe events; mapper writes do not change these windows.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -3620,6 +4060,8 @@ impl Mapper for GenericProbeMapper {
         value
     }
 
+    // Store work RAM or record mapper-space write count/address/value.
+    // Observed writes do not implement bank switching, IRQ or audio behavior.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -3651,9 +4093,11 @@ impl Mapper for GenericProbeMapper {
         }
     }
 
+    // Read unbanked CHR backing with address wrapping for inspection.
     fn read_chr(&mut self, addr: u16) -> u8 {
         self.chr[(addr as usize) % self.chr.len()]
     }
+    // Allow unbanked writes only when CHR RAM was allocated.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let len = self.chr.len();
@@ -3661,6 +4105,9 @@ impl Mapper for GenericProbeMapper {
         }
     }
 
+    // Mark the state as probe-only and report fixed windows plus the latest
+    // write observation. Header mirroring text is descriptive; runtime
+    // mirroring remains the trait's four-screen fallback.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper,
@@ -3680,6 +4127,8 @@ impl Mapper for GenericProbeMapper {
         )
     }
 
+    // Append mapper/write-observation fields and PRG RAM, plus CHR only when
+    // writable. Restore is unsupported by the inherited default implementation.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = Vec::new();
         v.extend_from_slice(&self.mapper.to_le_bytes());
@@ -3698,6 +4147,8 @@ impl Mapper for GenericProbeMapper {
 mod fds_audio_tests {
     use super::*;
 
+    // Program an original two-level 64-sample waveform and nonzero frequency,
+    // then unhalt the wave/envelope for synthetic audio tests.
     fn make_audible_fds() -> FdsAudioState {
         let mut fds = FdsAudioState::default();
         fds.write(0x4089, 0x80); // enable wavetable RAM writes while programming samples
@@ -3712,6 +4163,8 @@ mod fds_audio_tests {
     }
 
     #[test]
+    // Set direct gain to 32 and require at least one nonzero sample plus
+    // matching envelope readback; this is not a reference-waveform comparison.
     fn fds_direct_volume_outputs_samples() {
         let mut fds = make_audible_fds();
         fds.write(0x4080, 0x80 | 0x20); // direct volume = 32
@@ -3727,6 +4180,8 @@ mod fds_audio_tests {
     }
 
     #[test]
+    // Clock the fastest increasing and decreasing envelope modes and check
+    // that their gains move away from the corresponding initial endpoints.
     fn fds_volume_envelope_clocks_up_and_down() {
         let mut fds = make_audible_fds();
         fds.write(0x408A, 0x00);
@@ -3744,6 +4199,9 @@ mod fds_audio_tests {
     }
 
     #[test]
+    // Clock a positive-delta modulation fixture and require nonzero envelope
+    // gain, positive accumulator and matching readback. This test does not
+    // measure the resulting pitch against hardware audio.
     fn fds_modulation_envelope_affects_pitch_unit() {
         let mut fds = make_audible_fds();
         fds.write(0x4080, 0x80 | 0x20);

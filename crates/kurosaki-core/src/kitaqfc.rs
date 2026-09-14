@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Keep the input path, a best-effort format hint and the complete untyped JSON
+// for future compiler-debug integration.
 pub struct KitaqfcDebugBundle {
     pub path: PathBuf,
     pub format_hint: String,
@@ -12,6 +14,8 @@ pub struct KitaqfcDebugBundle {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Source location data for integration callers; no address lookup is performed
+// by this value type.
 pub struct SourceLocation {
     pub file: String,
     pub line: u32,
@@ -19,6 +23,9 @@ pub struct SourceLocation {
 }
 
 impl KitaqfcDebugBundle {
+    // Read UTF-8 JSON while retaining its full generic value. Prefer the lowercase
+    // format string, then Format, then an unknown-format label; this does not validate
+    // the debug schema, resolve source addresses or require a JSON object.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path_buf = path.as_ref().to_path_buf();
         let text = fs::read_to_string(&path_buf)?;
@@ -36,6 +43,8 @@ impl KitaqfcDebugBundle {
         })
     }
 
+    // This source-lookup entry point is currently a stub: every PC returns None,
+    // even when the bundle contains function or address-range metadata.
     pub fn function_name_for_pc(&self, _pc: u16) -> Option<String> {
         // Phase 0-3 keeps this conservative because current KITAQFC debug JSON is
         // not yet frozen. Future phases should read function_table.json or

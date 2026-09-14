@@ -8,6 +8,9 @@ use serde_json::json;
 
 const BANK_SIZE: usize = 16 * 1024;
 
+// Build an original 512 KiB mapper-1 battery fixture with CHR RAM, bank-ID
+// fill bytes and identical banks 15/31. These bytes exercise layout/state
+// checks; they are not a complete executable game.
 fn synthetic_rom() -> Vec<u8> {
     let mut rom = vec![0u8; 16 + 32 * BANK_SIZE];
     rom[0..4].copy_from_slice(b"NES\x1A");
@@ -23,6 +26,8 @@ fn synthetic_rom() -> Vec<u8> {
     rom
 }
 
+// Construct an explicit SUROM mapper with uniquely filled physical banks
+// and 8 KiB PRG/CHR RAM, independent of header inference.
 fn surom_mapper() -> Mmc1Mapper {
     let prg_rom = (0..32)
         .flat_map(|bank| std::iter::repeat_n(bank as u8, BANK_SIZE))
@@ -41,6 +46,8 @@ fn surom_mapper() -> Mmc1Mapper {
     )
 }
 
+// Write five least-significant-first bits two CPU cycles apart with mapper
+// tracing enabled, avoiding the consecutive-cycle suppression rule.
 fn serial_write(
     mapper: &mut dyn Mapper,
     addr: u16,
@@ -58,6 +65,8 @@ fn serial_write(
 }
 
 #[test]
+// Check all four CPU PRG slots before and after selecting the outer bank,
+// then require no physical ROM-bank label for the PRG-RAM window.
 fn surom_reports_the_physical_8k_bank_for_each_cpu_prg_slot() {
     let mut mapper = surom_mapper();
     let mut sink = TraceSink::default();
@@ -76,6 +85,8 @@ fn surom_reports_the_physical_8k_bank_for_each_cpu_prg_slot() {
 }
 
 #[test]
+// Disable CPU PRG-RAM access after importing battery bytes, then verify
+// physical sidecar export/import still works without changing mapper state.
 fn battery_surom_export_retains_physical_ram_while_cpu_access_is_disabled() {
     let cart = Cartridge::from_bytes(&synthetic_rom()).unwrap();
     let mut emulator = Emulator::from_cartridge(cart).unwrap();
@@ -99,6 +110,8 @@ fn battery_surom_export_retains_physical_ram_while_cpu_access_is_disabled() {
 }
 
 #[test]
+// Serially select the four MMC1 mirroring modes and check the returned
+// policy; this does not render nametable pixels.
 fn mmc1_control_drives_runtime_nametable_mirroring() {
     let mut mapper = surom_mapper();
     let mut sink = TraceSink::default();
@@ -119,6 +132,9 @@ fn mmc1_control_drives_runtime_nametable_mirroring() {
 }
 
 #[test]
+// Check size-based board inference and a structurally matching metadata
+// map, common replicas, vector bytes and nonempty odd-bank tails. Filled
+// reset tails satisfy the audit presence test without executing reset code.
 fn infers_and_audits_surom512_layout() {
     let cart = Cartridge::from_bytes(&synthetic_rom()).expect("synthetic ROM must parse");
     assert_eq!(cart.info.board_profile.as_deref(), Some("surom512"));
@@ -156,6 +172,8 @@ fn infers_and_audits_surom512_layout() {
 }
 
 #[test]
+// Select the outer half and verify all four PRG modes with inner bank five,
+// then read the resulting lower/upper window fill bytes.
 fn implements_outer_inner_and_per_half_fixed_windows() {
     let mut mapper = surom_mapper();
     let mut sink = TraceSink::default();
@@ -191,6 +209,9 @@ fn implements_outer_inner_and_per_half_fixed_windows() {
 }
 
 #[test]
+// Check disabled RAM reads, suppression of a serial write on the next CPU
+// cycle and its diagnostic mapping, then verify a reset-bit write bypasses
+// that suppression. All timing values are supplied directly to the mapper.
 fn implements_prg_ram_disable_and_consecutive_cycle_ignore() {
     let mut mapper = surom_mapper();
     let mut sink = TraceSink::default();
@@ -237,6 +258,8 @@ fn implements_prg_ram_disable_and_consecutive_cycle_ignore() {
 }
 
 #[test]
+// Select 4 KiB CHR mode with different CHR-bank high bits and require an
+// unsafe-mode event while the modeled outer PRG bank stays derived from CHR0.
 fn reports_unsafe_chr_mode_without_using_chr1_for_outer_bank() {
     let mut mapper = surom_mapper();
     let mut sink = TraceSink::default();
@@ -261,6 +284,8 @@ fn reports_unsafe_chr_mode_without_using_chr1_for_outer_bank() {
 }
 
 #[test]
+// Construct generic 256 KiB MMC1 and verify bank three with the final bank
+// fixed, retaining the generic profile rather than SUROM behavior.
 fn generic_mmc1_up_to_256k_remains_last_bank_fixed() {
     let prg_rom = (0..16)
         .flat_map(|bank| std::iter::repeat_n(bank as u8, BANK_SIZE))
@@ -274,6 +299,9 @@ fn generic_mmc1_up_to_256k_remains_last_bank_fixed() {
 }
 
 #[test]
+// Seed selected CPU fields, counters, CPU/PRG/CHR RAM and outer bank, then
+// strictly restore and compare those values, the observation hash and the
+// complete mapper-private payload. No post-restore instructions are executed.
 fn resumable_snapshot_restores_cpu_bus_and_mmc1_private_state() {
     let rom = synthetic_rom();
     let cart = Cartridge::from_bytes(&rom).expect("synthetic ROM must parse");
@@ -324,6 +352,8 @@ fn resumable_snapshot_restores_cpu_bus_and_mmc1_private_state() {
 }
 
 #[test]
+// Restore seeded PRG RAM, reset the CPU, then check the byte persists and
+// a reset event was recorded.
 fn reset_after_snapshot_restore_preserves_mmc1_prg_ram() {
     let rom = synthetic_rom();
     let cart = Cartridge::from_bytes(&rom).expect("synthetic ROM must parse");
@@ -361,6 +391,9 @@ fn reset_after_snapshot_restore_preserves_mmc1_prg_ram() {
 }
 
 #[test]
+// Remove mapper-private bytes and the instruction field from serialized
+// state and require deserialization failure. This tests required fields,
+// not execution of an earlier snapshot format.
 fn legacy_snapshot_without_private_state_is_rejected() {
     let rom = synthetic_rom();
     let cart = Cartridge::from_bytes(&rom).expect("synthetic ROM must parse");

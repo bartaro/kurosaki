@@ -1,5 +1,6 @@
 use sha2::{Digest, Sha256};
 
+// Hash the supplied byte sequence and encode its SHA-256 digest as lowercase hexadecimal.
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -12,6 +13,8 @@ pub fn sha256_hex(data: &[u8]) -> String {
     s
 }
 
+// Hash chunks in iteration order as one concatenated byte stream, avoiding a
+// combined input allocation. Chunk boundaries are not included in the digest.
 pub fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) -> String {
     let mut hasher = Sha256::new();
     for chunk in chunks {

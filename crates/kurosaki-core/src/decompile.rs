@@ -25,6 +25,8 @@ pub struct DecompileAddress {
 }
 
 impl DecompileAddress {
+    // Format a stable key containing a decimal physical bank and hexadecimal
+    // CPU address; identical CPU addresses in different banks remain distinct.
     pub fn id(self) -> String {
         format!("B{:03}:${:04X}", self.prg_bank_8k, self.cpu_addr)
     }
@@ -149,6 +151,8 @@ pub struct DecompileOptions {
 }
 
 impl Default for DecompileOptions {
+    // Start from vectors/call targets with a 2,048-instruction limit per root;
+    // physical-bank scanning and function selection are opt-in.
     fn default() -> Self {
         Self {
             selected_functions: Vec::new(),
@@ -190,10 +194,12 @@ pub struct DecompileLabelOverride {
     pub kind: String,
 }
 
+// Supply the v1 schema string when deserializing an omitted schema field.
 fn default_annotation_schema() -> String {
     "kurosaki-decompile-annotations-v1".to_string()
 }
 
+// Mark annotations without an explicit label category as user labels.
 fn default_label_kind() -> String {
     "user".to_string()
 }
@@ -204,6 +210,8 @@ struct AddressMapping {
 }
 
 impl AddressMapping {
+    // Capture the four currently visible physical 8 KiB PRG banks once.
+    // The analyzer does not execute subsequent mapper writes.
     fn from_emulator(emulator: &Emulator) -> Self {
         Self {
             windows: [0x8000, 0xA000, 0xC000, 0xE000]
@@ -211,6 +219,8 @@ impl AddressMapping {
         }
     }
 
+    // Resolve a CPU ROM address through its captured 8 KiB slot, returning
+    // None for RAM/IO or a slot without a known physical bank.
     fn map_cpu_addr(&self, cpu_addr: u16) -> Option<DecompileAddress> {
         if cpu_addr < 0x8000 {
             return None;
@@ -226,6 +236,8 @@ impl AddressMapping {
             })
     }
 
+    // Keep the source physical bank for targets in the same CPU slot;
+    // resolve other ROM slots through the captured mapper windows.
     fn resolve_target(
         &self,
         source: DecompileAddress,
@@ -243,6 +255,8 @@ impl AddressMapping {
         self.map_cpu_addr(target_cpu_addr)
     }
 
+    // Read an operand from the source bank until it crosses a CPU-slot
+    // boundary, then use the captured window for the next slot.
     fn read_byte(&self, cart: &Cartridge, source: DecompileAddress, cpu_addr: u16) -> Option<u8> {
         let address = if source.cpu_addr & 0xE000 == cpu_addr & 0xE000 {
             DecompileAddress {
@@ -279,6 +293,7 @@ enum FlowKind {
 }
 
 impl FlowKind {
+    // Use stable lowercase flow tags in serialized instructions and reports.
     fn as_str(self) -> &'static str {
         match self {
             Self::Fallthrough => "fallthrough",
@@ -293,6 +308,8 @@ impl FlowKind {
 }
 
 /// Analyze a ROM using the mapper state immediately after reset.
+// Construct and reset a fresh emulator to obtain mapping and vector
+// context, then analyze bytes without executing the program.
 pub fn analyze_cartridge(cart: &Cartridge, options: &DecompileOptions) -> Result<DecompileReport> {
     let mut emulator = Emulator::from_cartridge(cart.clone())?;
     emulator.reset(TraceConfig::none());
@@ -302,6 +319,8 @@ pub fn analyze_cartridge(cart: &Cartridge, options: &DecompileOptions) -> Result
 /// Analyze a ROM using the mapper state restored in `emulator`.
 ///
 /// Call this variant after `Emulator::from_snapshot` for bank-switched games.
+// Capture the supplied emulator mapping and use its current PC as an
+// additional root; analysis leaves the emulator state unchanged.
 pub fn analyze_emulator(
     emulator: &Emulator,
     options: &DecompileOptions,
@@ -316,6 +335,8 @@ pub fn analyze_emulator(
     ))
 }
 
+// Collect roots, follow bounded static paths, then build labels, incoming
+// references and function artifacts under one fixed mapper context.
 fn analyze_with_mapping(
     cart: &Cartridge,
     mapping: &AddressMapping,
@@ -323,6 +344,8 @@ fn analyze_with_mapping(
     mapper_name: &str,
     options: &DecompileOptions,
 ) -> DecompileReport {
+    // The supplied current PC is initially labeled Reset even for a restored
+    // snapshot; vectors are also read from the captured PRG mapping.
     let mut roots: BTreeMap<DecompileAddress, (String, String)> = BTreeMap::new();
     insert_root(
         &mut roots,
@@ -354,6 +377,8 @@ fn analyze_with_mapping(
         }
     }
     if options.include_all_prg_banks {
+        // Seed each physical bank at CPU $8000. A bank may contain data, and
+        // cross-slot references still use the original captured windows.
         for prg_bank_8k in 0..prg_bank_count(cart) {
             let address = DecompileAddress {
                 prg_bank_8k,
@@ -368,6 +393,8 @@ fn analyze_with_mapping(
         }
     }
 
+    // Analyze each valid root once, appending newly discovered direct-call
+    // targets. The instruction budget applies separately to each function.
     let mut pending: VecDeque<DecompileAddress> = roots.keys().copied().collect();
     let mut analyzed: BTreeMap<DecompileAddress, FunctionAnalysis> = BTreeMap::new();
     while let Some(start) = pending.pop_front() {
@@ -435,6 +462,8 @@ fn analyze_with_mapping(
         .map(|analysis| build_function(analysis, &xrefs_in, &labels))
         .collect::<Vec<_>>();
     functions.sort_by_key(|function| function.start);
+    // Filter displayed functions after analysis. Global labels and xrefs
+    // retain entries from other analyzed roots; --all bypasses this filter.
     if !options.selected_functions.is_empty() && !options.include_all_prg_banks {
         functions.retain(|function| {
             options
@@ -467,6 +496,9 @@ fn analyze_with_mapping(
 }
 
 /// Apply KOKURA-style rename, calling-convention, note, and label overrides.
+// Apply matching overrides in order and count changed fields/new notes.
+// Canonical names and addresses remain stable. The schema string is not
+// validated here, and a function rename does not rename its label entry.
 pub fn apply_annotations(
     report: &mut DecompileReport,
     annotations: &DecompileAnnotationFile,
@@ -532,6 +564,9 @@ pub fn apply_annotations(
 }
 
 /// Overlay CPU instruction events from KUROSAKI `trace` JSONL output.
+// Match instruction events by physical bank and PC within each function.
+// The return count includes each function/event match, so overlapping
+// functions can count one event more than once. No ROM identity is checked.
 pub fn apply_trace_events(report: &mut DecompileReport, events: &[TraceEvent]) -> usize {
     let mut matched = 0usize;
     for function in &mut report.functions {
@@ -585,6 +620,8 @@ pub fn apply_trace_events(report: &mut DecompileReport, events: &[TraceEvent]) -
                 sources.insert(format!("{file}:{line}"));
             }
         }
+        // Replace an existing overlay only when this batch has hits. A zero-hit
+        // batch leaves the previous summary intact; hot PCs remain address-sorted.
         if summary.hit_count != 0 {
             summary.hot_pcs = hot
                 .into_iter()
@@ -597,6 +634,8 @@ pub fn apply_trace_events(report: &mut DecompileReport, events: &[TraceEvent]) -
     matched
 }
 
+// Render function pseudocode, user notes and warnings under a mapping
+// summary. Caller-supplied names/notes are inserted as Markdown verbatim.
 pub fn render_markdown(report: &DecompileReport) -> String {
     let mut out = format!(
         "# KUROSAKI Decompile Report\n\n- Mapper: `{}` ({})\n- PRG: `{}` bytes / `{}` x 8 KiB bank(s)\n- Analysis windows: `{}`\n\n",
@@ -638,6 +677,8 @@ pub fn render_markdown(report: &DecompileReport) -> String {
     out
 }
 
+// Emit each selected function with its pseudocode and disassembly in
+// plain text, retaining the static confidence score.
 pub fn render_text(report: &DecompileReport) -> String {
     let mut out = format!(
         "KUROSAKI decompile: mapper {} {} / {} PRG bank(s)\n\n",
@@ -657,6 +698,8 @@ pub fn render_text(report: &DecompileReport) -> String {
     out
 }
 
+// Ignore unresolved roots and preserve an existing reset-root identity;
+// otherwise the most recently supplied name and source kind take precedence.
 fn insert_root(
     roots: &mut BTreeMap<DecompileAddress, (String, String)>,
     address: Option<DecompileAddress>,
@@ -674,6 +717,9 @@ fn insert_root(
     }
 }
 
+// Walk reachable instruction addresses with a deduplicated work queue.
+// Calls seed separate function roots while their fallthrough stays here;
+// direct jumps/branches extend this function under the captured mapping.
 fn analyze_function(
     cart: &Cartridge,
     mapping: &AddressMapping,
@@ -692,6 +738,8 @@ fn analyze_function(
         warnings: Vec::new(),
     };
     let mut pending = VecDeque::from([start]);
+    // Clamp a zero requested budget to one decoded instruction and report
+    // truncation only when more queued work reaches the limit.
     let limit = options.max_instructions_per_function.max(1);
     while let Some(address) = pending.pop_front() {
         if analysis.instructions.contains_key(&address) {
@@ -718,6 +766,8 @@ fn analyze_function(
         };
         let next = next_address(mapping, address, instruction.bytes.len());
         let flow = flow_kind(&instruction);
+        // Warn about a possible bank change without simulating the write or
+        // changing subsequent target resolution in this static pass.
         if is_mapper_write(&instruction) {
             push_unique(
                 &mut analysis.warnings,
@@ -823,6 +873,9 @@ fn analyze_function(
     analysis
 }
 
+// Assemble blocks and start-address incoming references. Confidence is
+// a warning-count heuristic, and the register calling convention is a
+// default guess rather than an inferred ABI.
 fn build_function(
     analysis: FunctionAnalysis,
     xrefs_in: &BTreeMap<DecompileAddress, Vec<DecompileXref>>,
@@ -835,6 +888,8 @@ fn build_function(
         .copied()
         .max()
         .unwrap_or(analysis.start);
+    // Apply a fixed penalty per distinct warning, with a minimum of 0.20;
+    // the score is not a measured probability or trace-derived confidence.
     let confidence_score = (0.90 - analysis.warnings.len() as f32 * 0.08).max(0.20);
     let artifact = render_artifact(
         &analysis.name,
@@ -861,12 +916,17 @@ fn build_function(
     }
 }
 
+// Partition address-sorted instructions at discovered leaders and flow
+// terminators, then link successor/predecessor blocks. Backward address
+// edges mark possible loops without dominator analysis.
 fn build_blocks(
     instructions: &BTreeMap<DecompileAddress, DecompileInstruction>,
 ) -> Vec<DecompileBasicBlock> {
     if instructions.is_empty() {
         return Vec::new();
     }
+    // The map sorts by bank before CPU address. Following its next key can
+    // span gaps, so these blocks remain a static reconstruction heuristic.
     let ordered = instructions.keys().copied().collect::<Vec<_>>();
     let mut leaders = BTreeSet::from([ordered[0]]);
     for instruction in instructions.values() {
@@ -969,6 +1029,8 @@ fn build_blocks(
                 continue;
             };
             if !block.successors.contains(&id) {
+                // Use address order as a possible back-edge signal; no execution trace
+                // or formal loop proof is used for this label.
                 if address <= block.start {
                     block.loop_role = Some("loop_latch".to_string());
                 }
@@ -999,6 +1061,8 @@ fn build_blocks(
     blocks
 }
 
+// Render bank-qualified disassembly and labeled C-like pseudocode from
+// the existing blocks; trace evidence is attached separately.
 fn render_artifact(
     name: &str,
     blocks: &[DecompileBasicBlock],
@@ -1039,6 +1103,9 @@ fn render_artifact(
     }
 }
 
+// Translate a small instruction subset into readable operations and
+// retain the rest as assembly comments. Operands and flags are symbolic;
+// this output is not recompilable or a complete model of CPU side effects.
 fn pseudocode_line(
     instruction: &DecompileInstruction,
     labels: &BTreeMap<DecompileAddress, DecompileLabel>,
@@ -1093,6 +1160,7 @@ fn pseudocode_line(
     }
 }
 
+// Map the eight conditional branches to symbolic status-flag predicates.
 fn branch_condition(mnemonic: &str) -> Option<&'static str> {
     match mnemonic {
         "BPL" => Some("!negative"),
@@ -1107,6 +1175,9 @@ fn branch_condition(mnemonic: &str) -> Option<&'static str> {
     }
 }
 
+// Fetch bytes with checked CPU-address progression, classify static
+// flow and resolve direct targets. An unavailable operand ends decoding;
+// indirect JMP retains an unresolved target.
 fn decode_instruction(
     cart: &Cartridge,
     mapping: &AddressMapping,
@@ -1162,6 +1233,8 @@ fn decode_instruction(
     })
 }
 
+// Derive lengths from the shared mnemonic templates, with explicit
+// relative branches. Unofficial opcodes consume one byte and stop analysis.
 fn instruction_len(opcode: u8, mnemonic: &str) -> usize {
     if matches!(
         opcode,
@@ -1181,6 +1254,8 @@ fn instruction_len(opcode: u8, mnemonic: &str) -> usize {
     }
 }
 
+// Treat unofficial instructions as unknown static path terminators;
+// classify official calls, jumps, branches, returns and BRK explicitly.
 fn flow_from_opcode(opcode: u8, mnemonic: &str) -> FlowKind {
     if mnemonic.starts_with('*') {
         return FlowKind::Unknown;
@@ -1195,6 +1270,8 @@ fn flow_from_opcode(opcode: u8, mnemonic: &str) -> FlowKind {
     }
 }
 
+// Read the stored flow tag, treating unrecognized strings as ordinary
+// fallthrough for block construction and path handling.
 fn flow_kind(instruction: &DecompileInstruction) -> FlowKind {
     match instruction.flow_kind.as_str() {
         "call" => FlowKind::Call,
@@ -1207,6 +1284,8 @@ fn flow_kind(instruction: &DecompileInstruction) -> FlowKind {
     }
 }
 
+// Substitute immediate, zero-page and absolute operands into mnemonic
+// templates; relative branches display their wrapped 16-bit CPU target.
 fn render_instruction(mnemonic: &str, cpu_addr: u16, bytes: &[u8]) -> String {
     if bytes.len() == 2
         && matches!(
@@ -1238,6 +1317,8 @@ fn render_instruction(mnemonic: &str, cpu_addr: u16, bytes: &[u8]) -> String {
     }
 }
 
+// Read a little-endian word through both captured ROM slots, rejecting
+// an unknown mapping or CPU-address overflow.
 fn mapped_u16(cart: &Cartridge, mapping: &AddressMapping, cpu_addr: u16) -> Option<u16> {
     let low = mapping.map_cpu_addr(cpu_addr)?;
     let high_cpu = cpu_addr.checked_add(1)?;
@@ -1247,6 +1328,8 @@ fn mapped_u16(cart: &Cartridge, mapping: &AddressMapping, cpu_addr: u16) -> Opti
     Some(u16::from_le_bytes([low, high]))
 }
 
+// Advance by instruction length without wrapping past $FFFF and resolve
+// a possible slot crossing through the captured mapping.
 fn next_address(
     mapping: &AddressMapping,
     address: DecompileAddress,
@@ -1256,6 +1339,8 @@ fn next_address(
     mapping.resolve_target(address, next_cpu_addr)
 }
 
+// Return the next key in physical-bank/CPU-address sort order. This
+// helper does not verify byte adjacency or CPU fallthrough mapping.
 fn next_in_instruction_map(
     instructions: &BTreeMap<DecompileAddress, DecompileInstruction>,
     address: DecompileAddress,
@@ -1269,6 +1354,8 @@ fn next_in_instruction_map(
         .map(|(address, _)| *address)
 }
 
+// Keep the numeric CPU destination even when its physical bank cannot
+// be resolved, alongside the caller-supplied kind and confidence tag.
 fn make_xref(
     instruction: &DecompileInstruction,
     kind: &str,
@@ -1286,6 +1373,8 @@ fn make_xref(
     }
 }
 
+// Index resolved outgoing references by their exact target address;
+// unresolved CPU-only targets cannot become incoming banked references.
 fn build_xrefs_in(xrefs: &[DecompileXref]) -> BTreeMap<DecompileAddress, Vec<DecompileXref>> {
     let mut incoming = BTreeMap::new();
     for xref in xrefs {
@@ -1299,6 +1388,8 @@ fn build_xrefs_in(xrefs: &[DecompileXref]) -> BTreeMap<DecompileAddress, Vec<Dec
     incoming
 }
 
+// Rebuild text using current function names and labels while preserving
+// each function's previously attached trace summary.
 fn refresh_artifacts(report: &mut DecompileReport) {
     let labels = report
         .labels
@@ -1327,6 +1418,8 @@ fn refresh_artifacts(report: &mut DecompileReport) {
     }
 }
 
+// Accept an exact parsed bank/address or an ASCII-case-insensitive ID,
+// current name or canonical name.
 fn function_selector_matches(function: &DecompileFunction, selector: &str) -> bool {
     let selector = selector.trim();
     parse_address_selector(selector).is_some_and(|address| address == function.start)
@@ -1335,6 +1428,8 @@ fn function_selector_matches(function: &DecompileFunction, selector: &str) -> bo
         || selector.eq_ignore_ascii_case(&function.canonical_name)
 }
 
+// Parse an optional uppercase B plus decimal bank, colon and CPU address.
+// Syntax parsing does not check whether the address exists in the ROM.
 fn parse_address_selector(selector: &str) -> Option<DecompileAddress> {
     let (bank, address) = selector
         .trim()
@@ -1349,6 +1444,7 @@ fn parse_address_selector(selector: &str) -> Option<DecompileAddress> {
     })
 }
 
+// Accept trimmed decimal or $, 0x and 0X hexadecimal values that fit u16.
 fn parse_u16(value: &str) -> Option<u16> {
     let value = value.trim();
     if let Some(hex) = value
@@ -1362,6 +1458,8 @@ fn parse_u16(value: &str) -> Option<u16> {
     }
 }
 
+// Use a sanitized explicit label when present, otherwise generate one
+// from the bank and CPU address.
 fn label_name(
     labels: &BTreeMap<DecompileAddress, DecompileLabel>,
     address: DecompileAddress,
@@ -1372,14 +1470,19 @@ fn label_name(
         .unwrap_or_else(|| sanitize_identifier(&auto_label_name(address)))
 }
 
+// Generate a deterministic function candidate name from its banked root.
 fn auto_function_name(address: DecompileAddress) -> String {
     format!("sub_B{:03}_{:04X}", address.prg_bank_8k, address.cpu_addr)
 }
 
+// Generate a deterministic control-flow label from its banked address.
 fn auto_label_name(address: DecompileAddress) -> String {
     format!("L_B{:03}_{:04X}", address.prg_bank_8k, address.cpu_addr)
 }
 
+// Replace non-ASCII identifier characters with underscores, protect a
+// leading digit and supply a name for empty input. Collisions and language
+// keywords are not resolved.
 fn sanitize_identifier(value: &str) -> String {
     let mut out = String::new();
     for (index, character) in value.chars().enumerate() {
@@ -1399,12 +1502,16 @@ fn sanitize_identifier(value: &str) -> String {
     }
 }
 
+// Require a CPU ROM address whose bank plus 8 KiB-relative offset lies
+// inside the available PRG bytes.
 fn physical_address_is_valid(cart: &Cartridge, address: DecompileAddress) -> bool {
     address.cpu_addr >= 0x8000
         && usize::from(address.prg_bank_8k) * PRG_BANK_SIZE + usize::from(address.cpu_addr & 0x1FFF)
             < cart.prg_rom.len()
 }
 
+// Index PRG bytes by physical bank and the low 13 CPU-address bits with
+// checked arithmetic and a bounds-checked read.
 fn read_physical_prg_byte(cart: &Cartridge, address: DecompileAddress) -> Option<u8> {
     let index = usize::from(address.prg_bank_8k)
         .checked_mul(PRG_BANK_SIZE)?
@@ -1412,22 +1519,31 @@ fn read_physical_prg_byte(cart: &Cartridge, address: DecompileAddress) -> Option
     cart.prg_rom.get(index).copied()
 }
 
+// Convert a PRG byte location to its iNES file offset, including the
+// 16-byte header and optional 512-byte trainer.
 fn physical_file_offset(cart: &Cartridge, address: DecompileAddress) -> usize {
     16 + cart.trainer.as_ref().map_or(0, |_| 512)
         + usize::from(address.prg_bank_8k) * PRG_BANK_SIZE
         + usize::from(address.cpu_addr & 0x1FFF)
 }
 
+// Round a partial final PRG bank up to 8 KiB and represent the count in
+// the report's u16 bank-index space.
 fn prg_bank_count(cart: &Cartridge) -> u16 {
     cart.prg_rom.len().div_ceil(PRG_BANK_SIZE) as u16
 }
 
+// Flag direct-looking STA/STX/STY operands at $8000 or above. This is a
+// conservative warning heuristic: it does not resolve indexed addresses,
+// indirect stores, RMW operations or expansion-space mapper registers.
 fn is_mapper_write(instruction: &DecompileInstruction) -> bool {
     matches!(instruction.mnemonic.as_str(), "STA" | "STX" | "STY")
         && parse_absolute_operand(&instruction.operand_text)
             .is_some_and(|address| address >= 0x8000)
 }
 
+// Extract exactly four leading hexadecimal digits after optional
+// parentheses and dollar signs, allowing an indexed suffix to follow.
 fn parse_absolute_operand(operand: &str) -> Option<u16> {
     let value = operand.trim_start_matches('(').trim_start_matches('$');
     let digits = value
@@ -1439,6 +1555,7 @@ fn parse_absolute_operand(operand: &str) -> Option<u16> {
         .flatten()
 }
 
+// Preserve warning order while avoiding duplicate text.
 fn push_unique(items: &mut Vec<String>, item: String) {
     if !items.contains(&item) {
         items.push(item);
@@ -1449,6 +1566,8 @@ fn push_unique(items: &mut Vec<String>, item: String) {
 mod tests {
     use super::*;
 
+    // Place a small original fixture into a zero-filled 16 KiB NROM image
+    // and point NMI/reset/IRQ vectors at the supplied CPU address.
     fn synthetic_nrom(prg: &[u8], reset: u16) -> Cartridge {
         let mut bytes = vec![0_u8; 16 + 16 * 1024];
         bytes[0..4].copy_from_slice(b"NES\x1A");
@@ -1462,6 +1581,8 @@ mod tests {
     }
 
     #[test]
+    // Analyze an original load/call/backward-branch fixture and require a
+    // call reference, readable load/branch text and a possible-loop marker.
     fn analyzer_recovers_call_cfg_and_readable_pseudocode() {
         let mut prg = vec![0xEA; 16 * 1024];
         // $C000: LDA #$12; JSR $C010; BNE $C000; RTS
@@ -1488,6 +1609,8 @@ mod tests {
     }
 
     #[test]
+    // Require the exact byte slices and addresses for indexed-indirect,
+    // indirect-indexed, zero-page-indexed and return instructions.
     fn analyzer_keeps_indexed_indirect_instruction_boundaries() {
         let mut prg = vec![0xEA; 16 * 1024];
         // $C000: LDA ($10,X); LDA ($20),Y; INC $30,X; RTS
@@ -1518,6 +1641,8 @@ mod tests {
     }
 
     #[test]
+    // Apply a rename, calling convention and note through the stable ID,
+    // then check the three-change count and regenerated function heading.
     fn annotations_rename_functions_and_rebuild_pseudocode() {
         let prg = vec![0x60; 16 * 1024];
         let mut report =
@@ -1549,6 +1674,8 @@ mod tests {
     }
 
     #[test]
+    // Attach one constructed instruction event at a known function root
+    // and require one match/hit. The fixture does not execute a ROM.
     fn trace_overlay_counts_exact_physical_bank_and_pc() {
         let prg = vec![0x60; 16 * 1024];
         let mut report =

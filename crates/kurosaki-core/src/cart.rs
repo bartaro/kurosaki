@@ -29,6 +29,9 @@ pub enum Mirroring {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Header-derived metadata plus explicit inference labels and warnings. RAM
+// totals may combine volatile and nonvolatile storage; battery import performs
+// its own stricter layout checks.
 pub struct RomInfo {
     pub path: Option<PathBuf>,
     pub file_size: usize,
@@ -56,6 +59,8 @@ pub struct RomInfo {
 }
 
 #[derive(Debug, Clone)]
+// Owned program/character payloads and optional trainer or disk state.
+// The raw header is preserved so consumers can inspect original flag fields.
 pub struct Cartridge {
     pub info: RomInfo,
     pub prg_rom: Vec<u8>,
@@ -67,6 +72,9 @@ pub struct Cartridge {
 }
 
 impl Cartridge {
+    // Read the complete input and prefer iNES magic over FDS detection. FDS files
+    // require an external BIOS; other inputs use the iNES parser. Preserve the input
+    // path only after parsing succeeds.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self> {
         let path_ref = path.as_ref();
         let bytes = fs::read(path_ref)?;
@@ -82,6 +90,9 @@ impl Cartridge {
         Ok(cart)
     }
 
+    // Require an 8 KiB caller-supplied BIOS and parse disk blocks for direct boot.
+    // The ROM fingerprint covers disk bytes only, not the BIOS; PRG-ROM holds the
+    // BIOS while the disk object supplies the initial RAM contents.
     pub fn from_fds_bytes_with_bios(bytes: &[u8], bios_rom: Vec<u8>) -> Result<Self> {
         if bios_rom.len() != 8 * 1024 {
             return Err(KurosakiError::InvalidRom(format!(
@@ -145,6 +156,9 @@ impl Cartridge {
         })
     }
 
+    // Validate the iNES header and declared trainer/ROM payload lengths, then
+    // copy the payloads and derive metadata. Extra trailing bytes are accepted and
+    // participate in the file hash; no CPU code is executed by this parser.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 16 {
             return Err(KurosakiError::InvalidRom(
@@ -219,6 +233,8 @@ impl Cartridge {
             HeaderKind::Fds => unreachable!("iNES parser never assigns FDS header kind"),
         };
 
+        // A present trainer consumes 512 bytes before PRG. Preserve it separately;
+        // this parser does not copy trainer data into emulated RAM.
         let mut offset = 16usize;
         let trainer = if trainer_present {
             if bytes.len() < offset + 512 {
@@ -245,6 +261,8 @@ impl Cartridge {
         offset += prg_rom_size;
         let chr_rom = bytes[offset..offset + chr_rom_size].to_vec();
 
+        // Legacy zero PRG-RAM banks imply one 8 KiB bank; NES 2.0 sums the two
+        // RAM nibbles without retaining their volatility split in this total.
         let prg_ram_size = match header_kind {
             HeaderKind::INes => {
                 let banks = if raw_header[8] == 0 {
@@ -273,6 +291,8 @@ impl Cartridge {
             HeaderKind::Fds => unreachable!("iNES parser never assigns FDS header kind"),
         };
 
+        // Expose the header region as a hint. Choosing the emulator clock policy
+        // is a separate concern from reading this field.
         let region_hint = match header_kind {
             HeaderKind::INes => match raw_header[9] & 0x01 {
                 0 => Some("ntsc_or_unspecified".to_string()),
@@ -342,11 +362,16 @@ impl Cartridge {
         })
     }
 
+    // Serialize metadata alone as indented JSON; ROM, trainer and disk payloads
+    // are not included in this report.
     pub fn to_info_json_pretty(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(&self.info)?)
     }
 }
 
+// Recognize the exact mapper-1, 512 KiB PRG-ROM and 8 KiB PRG/CHR-RAM size
+// combination as surom512. Confidence is a fixed label for this size rule, not
+// a measured probability or verification of physical board wiring.
 fn infer_board_profile(
     mapper: u16,
     prg_rom_size: usize,
@@ -369,6 +394,8 @@ fn infer_board_profile(
     (None, None, None)
 }
 
+// Recognize the case-insensitive .fds extension or disk magic. This is only
+// format dispatch; malformed candidates are handled by the disk parser.
 fn looks_like_fds(path: &Path, bytes: &[u8]) -> bool {
     path.extension()
         .and_then(|s| s.to_str())
@@ -377,6 +404,9 @@ fn looks_like_fds(path: &Path, bytes: &[u8]) -> bool {
         || (bytes.len() >= 4 && &bytes[0..4] == b"FDS\x1A")
 }
 
+// Search the environment override, disk directory, working directory and
+// executable directory in that order. The first existing file either supplies
+// 8192 bytes or causes an error; an invalid candidate does not fall through.
 fn load_fds_bios(disk_path: &Path) -> Result<Vec<u8>> {
     let mut candidates = Vec::new();
     if let Ok(path) = std::env::var("KUROSAKI_DISKSYS_ROM") {
@@ -413,6 +443,10 @@ fn load_fds_bios(disk_path: &Path) -> Result<Vec<u8>> {
     ))
 }
 
+// Decode ordinary bank counts using the supplied unit. The high-nibble
+// C..F branch is the existing approximate size fallback: it ignores lsb and
+// derives exponent/multiplier from that nibble. Do not treat it as an exact
+// NES 2.0 exponent decoder; the returned size controls subsequent slicing.
 fn nes20_rom_size(
     lsb: u8,
     msb_or_exp: u8,
@@ -432,6 +466,8 @@ fn nes20_rom_size(
     }
 }
 
+// Decode zero as absent RAM and a nonzero nibble as 64 shifted by that code.
+// Callers combine volatile and nonvolatile sizes for the metadata total.
 fn nes20_shift_size(code: u8) -> usize {
     if code == 0 {
         0

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Serialized SARAKURA-facing observation with aggregate count and frame range.
+// Optional evidence references name expected artifacts rather than embedding them.
 pub struct DiagnosticEvent {
     pub schema: String,
     pub schema_version: u32,
@@ -29,6 +31,9 @@ pub struct DiagnosticEvent {
     pub recommendation: Option<String>,
 }
 
+// Convert warning/error traces first, then all report items, into aggregated
+// SARAKURA events. Report and trace keys use separate prefixes and do not merge.
+// Reference filenames are conventional labels; no evidence files are created.
 pub fn diagnostic_events_from_trace_and_report(
     trace: &TraceSink,
     report: &DiagnosticReport,
@@ -55,6 +60,8 @@ pub fn diagnostic_events_from_trace_and_report(
             addr: None,
             value: None,
             function_hint: item.function.clone(),
+            // Report aggregation distinguishes code, optional frame and PC. Its bank value
+            // is a fallback zero; it is not a correlated physical PRG-bank observation.
             summary_key: format!("report:{}:{:?}:{:?}", item.code, item.frame, item.pc),
             count: 1,
             first_seen: item.frame,
@@ -69,6 +76,9 @@ pub fn diagnostic_events_from_trace_and_report(
     builder.finish()
 }
 
+// Ignore non-warning traces and heuristically classify the rest by exact MMC1
+// kinds, then ordered kind/address tests. A visible PPU register write alone
+// does not prove a broken address sequence or a scroll race.
 fn map_trace_event(event: &TraceEvent) -> Option<DiagnosticEvent> {
     let severity = event.severity.as_deref().unwrap_or("info");
     let is_warning = matches!(severity, "warn" | "warning" | "error" | "err");
@@ -112,6 +122,8 @@ fn map_trace_event(event: &TraceEvent) -> Option<DiagnosticEvent> {
         addr: event.addr.map(|addr| format!("0x{addr:04X}")),
         value: event.value.map(|value| format!("0x{value:02X}")),
         function_hint: event.source_function.clone(),
+        // Trace aggregation keys include type, PC, address and scanline, but omit frame,
+        // bank, severity and source label. Distinct contexts can therefore share a group.
         summary_key: format!(
             "trace:{}:{:?}:{:?}:{:?}",
             event_type, event.pc, event.addr, event.scanline
@@ -126,6 +138,9 @@ fn map_trace_event(event: &TraceEvent) -> Option<DiagnosticEvent> {
     })
 }
 
+// Map report codes by ordered, case-insensitive substring tests. Informational
+// codes use observation/capability types; warning/error codes use risk types.
+// This is a compatibility heuristic, not a one-to-one catalog-ID lookup.
 fn diagnostic_to_sarakura_event_type(code: &str, severity: &Severity) -> &'static str {
     let upper = code.to_ascii_uppercase();
     if matches!(severity, Severity::Info) {
@@ -171,6 +186,7 @@ fn diagnostic_to_sarakura_event_type(code: &str, severity: &Severity) -> &'stati
     }
 }
 
+// Use the lowercase severity spellings expected by the diagnostic event format.
 fn severity_to_string(severity: &Severity) -> String {
     match severity {
         Severity::Info => "info",
@@ -180,6 +196,8 @@ fn severity_to_string(severity: &Severity) -> String {
     .to_string()
 }
 
+// Recognize lowercase error/err and warn/warning aliases; treat other spellings
+// as info. Case folding is not performed here.
 fn normalize_severity(severity: &str) -> &str {
     match severity {
         "error" | "err" => "error",
@@ -189,6 +207,8 @@ fn normalize_severity(severity: &str) -> &str {
 }
 
 #[derive(Default)]
+// Track first-encounter indices by summary key while retaining insertion order
+// in the output vector. Counts and frame endpoints are the only merged payloads.
 struct DiagnosticEventBuilder {
     next_id: u64,
     events: Vec<DiagnosticEvent>,
@@ -196,6 +216,9 @@ struct DiagnosticEventBuilder {
 }
 
 impl DiagnosticEventBuilder {
+    // Aggregate by summary_key, saturating the count and widening first/last seen
+    // frames. All other fields retain the first event's values, including severity,
+    // frame, cycle and bank. New IDs follow first encounter order.
     fn record(&mut self, mut event: DiagnosticEvent) {
         if let Some(index) = self.index_by_summary_key.get(&event.summary_key).copied() {
             let existing = &mut self.events[index];
@@ -211,11 +234,14 @@ impl DiagnosticEventBuilder {
         self.events.push(event);
     }
 
+    // Return the accumulated events in first-encounter order without further sorting.
     fn finish(self) -> Vec<DiagnosticEvent> {
         self.events
     }
 }
 
+// Choose the earlier present frame, preserving the sole known value or None
+// when neither input has a timestamp.
 fn min_opt(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     match (left, right) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -225,6 +251,8 @@ fn min_opt(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     }
 }
 
+// Choose the later present frame, preserving the sole known value or None
+// when both timestamps are absent.
 fn max_opt(left: Option<u64>, right: Option<u64>) -> Option<u64> {
     match (left, right) {
         (Some(a), Some(b)) => Some(a.max(b)),
@@ -238,6 +266,9 @@ fn max_opt(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 mod raster_mapping_tests {
     use super::*;
     #[test]
+    // Check that generic PPU writes to $2005/$2006 remain register-risk candidates,
+    // while $2007 maps to the data-write diagnostic. This test inspects classification
+    // only; it does not execute a PPU write sequence.
     fn visible_register_write_is_a_candidate_not_a_proven_sequence_failure() {
         let mut event = TraceEvent::new("ppu.reg_write", 1, 100);
         event.severity = Some("warn".into());

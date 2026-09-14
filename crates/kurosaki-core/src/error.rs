@@ -3,6 +3,8 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, KurosakiError>;
 
 #[derive(Debug, Error)]
+// Typed failures distinguish malformed input, unsupported hardware, stopped CPU
+// execution and persistence errors. I/O and JSON errors retain their original causes.
 pub enum KurosakiError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

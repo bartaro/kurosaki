@@ -3,6 +3,9 @@ use crate::diagnostics::DiagnosticReport;
 use crate::emulator::RunSummary;
 use crate::mapper_db::mapper_spec;
 
+// Render stored cartridge metadata and registry classification as English
+// Markdown. This performs no emulation, source lookup or additional ROM validation;
+// warning text is inserted without general Markdown escaping.
 pub fn rom_info_markdown(info: &RomInfo) -> String {
     let mut out = String::new();
     out.push_str("# KUROSAKI ROM Inspect Report\n\n");
@@ -29,6 +32,9 @@ pub fn rom_info_markdown(info: &RomInfo) -> String {
     out
 }
 
+// Render stored severity totals and diagnostic rows in input order. Missing
+// recommendations become empty cells; totals are not recomputed, and labels are
+// not escaped for Markdown table syntax.
 pub fn diagnostics_markdown(report: &DiagnosticReport) -> String {
     let mut out = String::new();
     out.push_str("# KUROSAKI Diagnostics Report\n\n");
@@ -49,6 +55,9 @@ pub fn diagnostics_markdown(report: &DiagnosticReport) -> String {
     out
 }
 
+// Format a previously captured run summary and its optional PC hotspots.
+// Counts and hashes describe that supplied summary; this neither advances the
+// emulator nor establishes that a requested gameplay path was exercised.
 pub fn run_summary_markdown(summary: &RunSummary) -> String {
     let mut out = String::new();
     out.push_str("# KUROSAKI Run Summary\n\n");

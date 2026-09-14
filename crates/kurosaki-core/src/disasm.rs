@@ -6,6 +6,7 @@ use crate::trace::TraceConfig;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// One legacy static-window instruction with an iNES-style file offset.
 pub struct DisasmLine {
     pub cpu_addr: u16,
     pub file_offset: usize,
@@ -14,6 +15,8 @@ pub struct DisasmLine {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// An instruction read through the private probe bus. No physical file
+// offset is attached because addresses may refer to devices or mutable RAM.
 pub struct MappedDisasmLine {
     pub cpu_addr: u16,
     pub bytes: Vec<u8>,
@@ -21,6 +24,8 @@ pub struct MappedDisasmLine {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// An immutable physical-bank instruction with both the requested CPU label
+// and its computed cartridge-file offset.
 pub struct PhysicalPrgDisasmLine {
     pub cpu_addr: u16,
     pub prg_bank_8k: u16,
@@ -29,11 +34,16 @@ pub struct PhysicalPrgDisasmLine {
     pub text: String,
 }
 
+// Start at the static ROM reset-vector guess, falling back to $8000 when
+// unavailable. This entry does not restore or inspect mapper bank state.
 pub fn disassemble_reset_window(cart: &Cartridge, max_bytes: usize) -> Vec<DisasmLine> {
     let start = reset_vector(cart).unwrap_or(0x8000);
     disassemble_range(cart, start, max_bytes)
 }
 
+// Read the vector from offset $3FFC for up to 16 KiB of PRG, otherwise
+// $7FFC. Larger banked ROMs still use the first 32 KiB window here; short
+// payloads return None and FDS BIOS vectors are not handled by this helper.
 pub fn reset_vector(cart: &Cartridge) -> Option<u16> {
     if cart.prg_rom.len() < 4 {
         return None;
@@ -48,6 +58,9 @@ pub fn reset_vector(cart: &Cartridge) -> Option<u16> {
     Some(lo | (hi << 8))
 }
 
+// Decode the legacy static window with a small opcode subset and zero-fill
+// unavailable reads. max_bytes sets a wrapped end address and a line-count
+// guard, not a strict byte budget: an instruction can skip the exact end.
 pub fn disassemble_range(cart: &Cartridge, mut addr: u16, max_bytes: usize) -> Vec<DisasmLine> {
     let mut out = Vec::new();
     let end = addr.wrapping_add(max_bytes as u16);
@@ -76,6 +89,9 @@ pub fn disassemble_range(cart: &Cartridge, mut addr: u16, max_bytes: usize) -> V
 /// not alter the caller's state. This is the appropriate entry point for
 /// bank-switched cartridges; `disassemble_range` intentionally retains its
 /// original reset-window/static-ROM behavior for compatibility.
+// Restore a private probe and decode until the consumed-byte budget is met
+// or exceeded by the last instruction. Reads do not clock or execute the CPU,
+// but device-read side effects can change the probe; the opcode is read twice.
 pub fn disassemble_mapped_range(
     emulator: &Emulator,
     mut addr: u16,
@@ -109,6 +125,9 @@ pub fn disassemble_mapped_range(
 /// This bypasses mapper state and is intended for correlating a trace's
 /// `prg_bank` plus `pc` context with immutable cartridge bytes. The requested
 /// range never wraps into a neighboring physical bank.
+// Select an immutable physical 8 KiB bank using the low 13 address bits,
+// then emit only instructions wholly inside the requested budget and bank.
+// Reported file offsets assume an iNES header and optional trainer.
 pub fn disassemble_physical_prg_bank_8k(
     cart: &Cartridge,
     prg_bank_8k: u16,
@@ -151,6 +170,7 @@ pub fn disassemble_physical_prg_bank_8k(
         let opcode = cart.prg_rom[start_index + consumed];
         let mnemonic = opcode_mnemonic(opcode);
         let len = instruction_len_from_mnemonic(opcode, mnemonic);
+        // Do not emit a partial instruction or fetch bytes from the next bank.
         if consumed + len > available {
             break;
         }
@@ -168,6 +188,8 @@ pub fn disassemble_physical_prg_bank_8k(
     Ok(out)
 }
 
+// Use ordinary side-effecting bus reads on the private probe with tracing
+// disabled and its unchanged frame/cycle timestamp.
 fn mapped_read(emulator: &mut Emulator, addr: u16) -> u8 {
     emulator.bus.read(
         addr,
@@ -178,6 +200,9 @@ fn mapped_read(emulator: &mut Emulator, addr: u16) -> u8 {
     )
 }
 
+// Recognize branch opcode patterns first, then infer length from the CPU
+// table operand placeholders. This depends on that table spelling, not a
+// general assembly parser or separate opcode-length table.
 pub fn instruction_len_from_mnemonic(opcode: u8, mnemonic: &str) -> usize {
     if opcode & 0x1f == 0x10 {
         return 2;
@@ -191,6 +216,9 @@ pub fn instruction_len_from_mnemonic(opcode: u8, mnemonic: &str) -> usize {
     }
 }
 
+// Format signed branch targets or replace the first operand placeholder
+// for two/three-byte instructions. Preserve the mnemonic unchanged when its
+// shape has no recognized placeholder.
 fn render_instruction(addr: u16, mnemonic: &str, bytes: &[u8]) -> String {
     if bytes.len() == 2 && bytes[0] & 0x1f == 0x10 {
         return format!("{} {}", mnemonic, branch_target(addr, bytes[1]));
@@ -219,6 +247,9 @@ fn render_instruction(addr: u16, mnemonic: &str, bytes: &[u8]) -> String {
     }
 }
 
+// Map a CPU address to the legacy first 16/32 KiB PRG window plus the
+// iNES header/trainer prefix. The result is not checked against actual payload
+// length and does not describe a bank-switched runtime mapping.
 fn prg_file_offset(cart: &Cartridge, addr: u16) -> Option<usize> {
     if addr < 0x8000 {
         return None;
@@ -232,6 +263,8 @@ fn prg_file_offset(cart: &Cartridge, addr: u16) -> Option<usize> {
     Some(16 + cart.trainer.as_ref().map(|_| 512).unwrap_or(0) + (base & mask))
 }
 
+// Read the mirrored first 16 KiB or fixed first 32 KiB of PRG. Return None
+// for addresses below $8000, empty payloads or indices beyond a short payload.
 fn read_prg(cart: &Cartridge, addr: u16) -> Option<u8> {
     if addr < 0x8000 || cart.prg_rom.is_empty() {
         return None;
@@ -245,12 +278,17 @@ fn read_prg(cart: &Cartridge, addr: u16) -> Option<u8> {
     cart.prg_rom.get(base & mask).copied()
 }
 
+// Read a little-endian static-ROM word, wrapping the second CPU address and
+// substituting zero for missing bytes.
 fn read_u16(cart: &Cartridge, addr: u16) -> u16 {
     let lo = read_prg(cart, addr).unwrap_or(0) as u16;
     let hi = read_prg(cart, addr.wrapping_add(1)).unwrap_or(0) as u16;
     lo | (hi << 8)
 }
 
+// Decode the listed common instructions; every other opcode becomes a
+// one-byte .db directive. Operand address additions retain the legacy
+// nonwrapping expression and can overflow at $FFFF in checked builds.
 fn decode_one(cart: &Cartridge, addr: u16, op: u8) -> (usize, String) {
     match op {
         0x00 => (1, "BRK".to_string()),
@@ -322,6 +360,8 @@ fn decode_one(cart: &Cartridge, addr: u16, op: u8) -> (usize, String) {
     }
 }
 
+// Sign-extend the displacement, add it to the address after the two-byte
+// branch, and format the wrapped 16-bit target in hexadecimal.
 fn branch_target(addr: u16, off: u8) -> String {
     let target = ((addr.wrapping_add(2) as i32) + (off as i8 as i32)) as u16;
     format!("${target:04X}")
@@ -332,6 +372,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // Check immediate, indexed absolute and negative-relative formatting with
+    // three representative table spellings; no mapped bus reads are performed.
     fn mapped_formatter_uses_full_opcode_table_operands() {
         assert_eq!(
             render_instruction(0x9000, "LDA #", &[0xa9, 0x2a]),
@@ -348,6 +390,7 @@ mod tests {
     }
 
     #[test]
+    // Check one implied, zero-page, absolute and relative instruction length.
     fn official_instruction_shapes_have_expected_lengths() {
         assert_eq!(instruction_len_from_mnemonic(0xea, "NOP"), 1);
         assert_eq!(instruction_len_from_mnemonic(0xa5, "LDA d"), 2);
@@ -356,6 +399,9 @@ mod tests {
     }
 
     #[test]
+    // Build a synthetic four-bank iNES image, check physical-bank selection
+    // and reported offsets/text, then reject a bank beyond the payload. The
+    // fixture does not place an instruction across the bank-end boundary.
     fn physical_prg_disassembly_selects_exact_8k_bank_without_wrapping() {
         let mut rom = vec![0_u8; 16 + 4 * 16 * 1024];
         rom[0..4].copy_from_slice(b"NES\x1A");

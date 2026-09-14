@@ -10,12 +10,16 @@ pub const SNAPSHOT_REBASE_REPORT_FORMAT: &str = "kurosaki-snapshot-rebase-report
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+// The only accepted transfer policy moves mutable mapper state while the
+// target mapper retains its own cartridge configuration.
 pub enum MapperStateTransfer {
     MutableStateRetainTargetConfiguration,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// An allowed range relative to the PRG payload, excluding the file header
+// and trainer. It binds both original and replacement bytes by SHA-256.
 pub struct PrgChangeDigest {
     pub offset: usize,
     pub length: usize,
@@ -25,6 +29,7 @@ pub struct PrgChangeDigest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// One complete target-only PRG suffix, beginning exactly at source PRG length.
 pub struct TargetPrgAppendDigest {
     pub offset: usize,
     pub length: usize,
@@ -33,6 +38,8 @@ pub struct TargetPrgAppendDigest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Contract for supplied patch bytes in the CPU-visible PRG-RAM window;
+// the bytes themselves are passed separately.
 pub struct PrgRamPatchDigest {
     pub cpu_address: u16,
     pub length: usize,
@@ -41,6 +48,7 @@ pub struct PrgRamPatchDigest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Contract for supplied physical CPU-RAM bytes, with no address mirroring.
 pub struct CpuRamPatchDigest {
     pub cpu_address: u16,
     pub length: usize,
@@ -49,6 +57,9 @@ pub struct CpuRamPatchDigest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+// Explicit identity and modification allowlist. Unknown JSON fields are
+// rejected; absent patch/change arrays default to empty and still undergo
+// semantic validation before state transfer.
 pub struct SnapshotRebaseContract {
     pub format: String,
     pub source_snapshot_sha256: String,
@@ -69,18 +80,23 @@ pub struct SnapshotRebaseContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Owned PRG-RAM replacement bytes supplied separately from their digest contract.
 pub struct PrgRamPatch {
     pub cpu_address: u16,
     pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Owned physical CPU-RAM replacement bytes supplied for the validated rebase.
 pub struct CpuRamPatch {
     pub cpu_address: u16,
     pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// Success report emitted only after strict target restoration succeeds.
+// Its pass flag proves this transfer contract, not gameplay compatibility
+// or correctness of the newly supplied program code.
 pub struct SnapshotRebaseReport {
     pub format: &'static str,
     pub pass: bool,
@@ -102,6 +118,11 @@ pub struct SnapshotRebaseReport {
     pub normal_snapshot_fingerprint_check_unchanged: bool,
 }
 
+// Validate identities, ROM differences and supplied RAM patches before
+// creating an isolated target emulator. Require normal strict restoration of
+// both source and final target snapshots; no CPU execution or file write
+// occurs here. The caller supplies the snapshot-file digest and must bind it
+// to the actual parsed input bytes.
 pub fn rebase_snapshot(
     source_cartridge: Cartridge,
     target_cartridge: Cartridge,
@@ -129,6 +150,8 @@ pub fn rebase_snapshot(
     // valid snapshot of the declared source ROM before any state is moved.
     Emulator::from_snapshot(source_cartridge, source_snapshot)?;
 
+    // Keep the target cartridge for the final strict-restore check. All
+    // intermediate mutations occur on the newly constructed local emulator.
     let target_for_roundtrip = target_cartridge.clone();
     let mut target = Emulator::from_cartridge(target_cartridge)?;
     target.restore_snapshot_for_rebase(source_snapshot)?;
@@ -167,6 +190,9 @@ pub fn rebase_snapshot(
     Ok((output, report))
 }
 
+// Require the supported contract/policy and exact lowercase identity
+// strings for the supplied cartridges, snapshot and file digest. Cartridge
+// hashes are read from metadata; this does not reread or rehash ROM files.
 fn validate_contract_identity(
     source: &Cartridge,
     target: &Cartridge,
@@ -217,6 +243,10 @@ fn validate_contract_identity(
     Ok(())
 }
 
+// Exclude disk images, require matching submapper, RAM totals, mirroring,
+// battery and console type, allow only PRG growth, and compare all CHR bytes.
+// This is the listed compatibility predicate, not equality of every header
+// field: trainer bytes, region hints and inferred profile labels are not checked.
 fn validate_cartridge_geometry(source: &Cartridge, target: &Cartridge) -> Result<()> {
     if matches!(source.info.header_kind, HeaderKind::Fds)
         || matches!(target.info.header_kind, HeaderKind::Fds)
@@ -241,6 +271,10 @@ fn validate_cartridge_geometry(source: &Cartridge, target: &Cartridge) -> Result
     Ok(())
 }
 
+// Verify ordered disjoint source-PRG ranges with both byte digests and at
+// least one difference per range. Reject changes outside those ranges and
+// require one exact digest for the entire appended suffix. Return actual
+// changed-byte count plus suffix size, not the sum of allowed range lengths.
 fn validate_prg_changes(
     source: &Cartridge,
     target: &Cartridge,
@@ -252,6 +286,8 @@ fn validate_prg_changes(
 
     let overlap = source.prg_rom.len();
     let mut previous_end = 0usize;
+    // Track allowlist coverage over the full source PRG payload so an
+    // unlisted byte difference cannot be hidden between permitted ranges.
     let mut covered = vec![false; overlap];
     let mut changed_bytes = 0usize;
     for change in &contract.allowed_prg_changes {
@@ -324,6 +360,9 @@ fn validate_prg_changes(
     Ok((changed_bytes, appended))
 }
 
+// Match patches positionally to their contracts, requiring exact address,
+// length and byte digest. Accept only nonempty ordered disjoint ranges in
+// $6000-$7FFF; the mapper later decides whether it can apply those writes.
 fn validate_prg_ram_patches(
     contract: &SnapshotRebaseContract,
     patches: &[PrgRamPatch],
@@ -354,6 +393,9 @@ fn validate_prg_ram_patches(
     Ok(())
 }
 
+// Match patches positionally and verify their digests before accepting
+// nonempty ordered disjoint ranges in physical $0000-$07FF. Mirrored CPU
+// RAM addresses are deliberately outside this contract.
 fn validate_cpu_ram_patches(
     contract: &SnapshotRebaseContract,
     patches: &[CpuRamPatch],
@@ -384,6 +426,8 @@ fn validate_cpu_ram_patches(
     Ok(())
 }
 
+// Require exactly 64 lowercase hexadecimal characters. This validates the
+// representation only; callers separately compare digests with their data.
 fn validate_digest(label: &str, digest: &str) -> Result<()> {
     if digest.len() != 64
         || !digest
@@ -397,6 +441,7 @@ fn validate_digest(label: &str, digest: &str) -> Result<()> {
     Ok(())
 }
 
+// Return a snapshot-format error with the requested message for any result type.
 fn snapshot_error<T>(message: impl Into<String>) -> Result<T> {
     Err(KurosakiError::SnapshotFormat(message.into()))
 }

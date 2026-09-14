@@ -7,6 +7,9 @@ use std::{
 };
 
 #[test]
+// Run real CLI subprocesses against a generated NROM that increments one
+// battery byte per cold boot. Check two successive saves, preserved input,
+// snapshot-to-save export and rejection of a short input without an output.
 fn battery_cli_roundtrip_and_invalid_input() {
     let dir = std::env::temp_dir().join(format!(
         "kurosaki-battery-cli-{}-{}",
@@ -32,6 +35,8 @@ fn battery_cli_roundtrip_and_invalid_input() {
     fs::write(&initial, vec![0x40; 8192]).unwrap();
     let exe = env!("CARGO_BIN_EXE_kurosaki");
     let path = |s: &str| -> PathBuf { dir.join(s) };
+    // Each invocation starts a fresh process and imports only the requested
+    // raw battery sidecar before running two frames and saving both artifacts.
     let run = |input: &str, output: &str, snapshot: &str| {
         let result = Command::new(exe)
             .arg("battery-run")
@@ -56,6 +61,8 @@ fn battery_cli_roundtrip_and_invalid_input() {
     run("first.sav", "second.sav", "second.kss.json");
     assert_eq!(fs::read(path("second.sav")).unwrap()[0], 0x42);
     assert_eq!(fs::read(initial).unwrap(), vec![0x40; 8192]);
+    // Export battery RAM from the second snapshot, then compare the complete
+    // sidecar rather than only the incremented byte.
     let export = Command::new(exe)
         .arg("battery-export")
         .arg(&rom)

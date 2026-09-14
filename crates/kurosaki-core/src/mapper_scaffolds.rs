@@ -39,6 +39,8 @@ pub struct Mmc5Mapper {
 }
 
 impl Mmc5Mapper {
+    // Allocate PRG RAM, ExRAM and CHR backing, initialize four PRG slots
+    // near the first/final banks, and clear mapper/IRQ/audio observations.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring, battery: bool) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         let prg_count = bank_count(prg_rom.len(), 8 * 1024);
@@ -67,6 +69,8 @@ impl Mmc5Mapper {
         }
     }
 
+    // Resolve one of four 8 KiB ROM slots according to the modeled PRG mode.
+    // All results reference ROM; PRG register bits are not used to select RAM.
     fn prg_bank_for_slot(&self, slot: usize) -> usize {
         let count = bank_count(self.prg_rom.len(), 8 * 1024);
         match self.prg_mode & 3 {
@@ -78,6 +82,8 @@ impl Mmc5Mapper {
                     ((self.prg_regs[3] as usize) & !1).saturating_add(slot - 2) % count
                 }
             }
+            // Mode two currently maps two independent lower 8 KiB slots and one
+            // aligned upper 16 KiB pair; describe this implementation explicitly.
             2 => {
                 if slot == 0 {
                     self.prg_regs[1] as usize % count
@@ -91,12 +97,16 @@ impl Mmc5Mapper {
         }
     }
 
+    // Use the first eight CHR registers as 1 KiB selectors with bank wrapping.
+    // The stored CHR mode and registers 8-11 do not affect this read mapping.
     fn chr_bank_for_addr(&self, addr: u16) -> usize {
         let count = bank_count(self.chr.len(), 1024);
         let slot = ((addr as usize) / 1024) & 7;
         self.chr_regs[slot] as usize % count
     }
 
+    // Describe the nametable-mode register and header mirroring for debug
+    // output; this type inherits the runtime four-screen mirroring fallback.
     fn mmc5_mirroring_name(&self) -> String {
         format!(
             "mmc5_nt_mode_{:02X}/{}",
@@ -107,13 +117,17 @@ impl Mmc5Mapper {
 }
 
 impl Mapper for Mmc5Mapper {
+    // Identify the MMC5-specific scaffold as mapper 5.
     fn mapper_id(&self) -> u16 {
         5
     }
+    // Return a label that identifies the implementation as a scaffold.
     fn mapper_name(&self) -> &'static str {
         "MMC5/ExROM scaffold"
     }
 
+    // Resolve a CPU ROM address through the modeled 8 KiB PRG slots, leaving
+    // registers, ExRAM and work RAM without a physical ROM label.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -127,6 +141,9 @@ impl Mapper for Mmc5Mapper {
         )
     }
 
+    // Route multiply-result, ExRAM and work-RAM reads or selected PRG ROM.
+    // Reading IRQ status clears the pending flag; audio-register reads return
+    // zero. Only the first 8 KiB of allocated work RAM is CPU-mapped here.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -167,6 +184,9 @@ impl Mapper for Mmc5Mapper {
         value
     }
 
+    // Latch bank/mode/IRQ/multiply fields and write ExRAM/work RAM. Audio
+    // addresses count and trace writes only; no MMC5 mixer override generates
+    // samples. Other selected writes may be traced without changing state.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -237,6 +257,7 @@ impl Mapper for Mmc5Mapper {
         }
     }
 
+    // Read the selected wrapped 1 KiB CHR bank.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -245,12 +266,16 @@ impl Mapper for Mmc5Mapper {
             addr as usize & 0x03FF,
         )
     }
+    // Write through the same 1 KiB mapping only when CHR RAM is present.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let bank = self.chr_bank_for_addr(addr);
             write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
         }
     }
+    // Approximate a scanline counter using every observed rising A12 edge.
+    // The eight-bit counter wraps and is not reset per frame in this method;
+    // a matching enabled target latches IRQ.
     fn notify_ppu_addr(
         &mut self,
         addr: u16,
@@ -276,12 +301,16 @@ impl Mapper for Mmc5Mapper {
         }
         self.last_a12 = a12;
     }
+    // Expose the pending mapper interrupt latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear pending IRQ without resetting the counter or enable flag.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Report effective PRG banks, raw CHR registers and stored mode/counter
+    // metadata for the scaffold.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             5,
@@ -296,6 +325,9 @@ impl Mapper for Mmc5Mapper {
             self.irq_pending(),
         )
     }
+    // Append register/IRQ fields, write count and PRG/ExRAM backing, adding
+    // CHR only when writable. This type inherits unsupported restore and
+    // battery-RAM export methods despite retaining a battery flag.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.prg_mode,
@@ -333,6 +365,7 @@ struct Vrc6PulseState {
 }
 
 impl Default for Vrc6PulseState {
+    // Start the pulse disabled with zero timer, volume and fractional phase.
     fn default() -> Self {
         Self {
             control: 0,
@@ -344,6 +377,8 @@ impl Default for Vrc6PulseState {
 }
 
 impl Vrc6PulseState {
+    // Decode control and 12-bit timer fields through the low two address
+    // bits; disabling the pulse also resets its phase.
     fn write(&mut self, reg: u16, value: u8) {
         match reg & 0x03 {
             0 => self.control = value,
@@ -359,6 +394,9 @@ impl Vrc6PulseState {
         }
     }
 
+    // Gate disabled/very-short-timer/zero-volume output, then advance phase
+    // and emit a duty pulse or constant-volume mode. Silent gating freezes
+    // phase; callers must provide a nonzero sample rate.
     fn sample(&mut self, sample_rate: u32) -> f64 {
         let volume = (self.control & 0x0F) as f64 / 15.0;
         if !self.enabled || self.timer < 2 || volume <= 0.0 {
@@ -378,6 +416,8 @@ impl Vrc6PulseState {
         }
     }
 
+    // Append control, timer and enable fields; the live fractional pulse
+    // phase is not included in this private representation.
     fn snapshot_bytes(&self, out: &mut Vec<u8>) {
         out.push(self.control);
         out.extend_from_slice(&self.timer.to_le_bytes());
@@ -394,6 +434,7 @@ struct Vrc6SawState {
 }
 
 impl Default for Vrc6SawState {
+    // Start the saw disabled with zero rate, timer and fractional phase.
     fn default() -> Self {
         Self {
             rate: 0,
@@ -405,6 +446,7 @@ impl Default for Vrc6SawState {
 }
 
 impl Vrc6SawState {
+    // Latch the six-bit rate and 12-bit timer, resetting phase on disable.
     fn write(&mut self, reg: u16, value: u8) {
         match reg & 0x03 {
             0 => self.rate = value & 0x3F,
@@ -420,6 +462,8 @@ impl Vrc6SawState {
         }
     }
 
+    // Generate a continuous saw approximation at the modeled timer frequency,
+    // scaled by rate. Gated output freezes phase, and sample rate must be nonzero.
     fn sample(&mut self, sample_rate: u32) -> f64 {
         if !self.enabled || self.timer < 2 || self.rate == 0 {
             return 0.0;
@@ -430,6 +474,7 @@ impl Vrc6SawState {
         ((self.phase * 2.0) - 1.0) * amp
     }
 
+    // Append rate, timer and enable state without the fractional saw phase.
     fn snapshot_bytes(&self, out: &mut Vec<u8>) {
         out.push(self.rate);
         out.extend_from_slice(&self.timer.to_le_bytes());
@@ -444,6 +489,8 @@ struct Vrc6AudioState {
 }
 
 impl Vrc6AudioState {
+    // Decode mirrored pulse-one, pulse-two and saw register triplets; return
+    // whether the address was consumed so mapper bank logic can stop dispatch.
     fn write(&mut self, addr: u16, value: u8) -> bool {
         match addr & 0xF003 {
             0x9000..=0x9002 => {
@@ -462,6 +509,8 @@ impl Vrc6AudioState {
         }
     }
 
+    // Advance two pulses and the saw once, apply fixed mixer gains and clamp
+    // the summed contribution to i16.
     fn sample(&mut self, sample_rate: u32) -> i16 {
         let mixed = self.pulse[0].sample(sample_rate) * 1900.0
             + self.pulse[1].sample(sample_rate) * 1900.0
@@ -469,6 +518,7 @@ impl Vrc6AudioState {
         mixed.clamp(i16::MIN as f64, i16::MAX as f64) as i16
     }
 
+    // Append both pulse records followed by the saw record in a fixed order.
     fn snapshot_bytes(&self, out: &mut Vec<u8>) {
         self.pulse[0].snapshot_bytes(out);
         self.pulse[1].snapshot_bytes(out);
@@ -478,10 +528,13 @@ impl Vrc6AudioState {
 
 const VRC7_CHANNEL_COUNT: usize = 6;
 const VRC7_REG_COUNT: usize = 0x40;
+// Clamp a floating-point gain to the unit interval.
 fn vrc7_clamp01(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
 
+// Decode the low-nibble operator frequency multiplier, including the
+// half-frequency zero entry and repeated high-nibble values.
 fn vrc7_mul_from_nibble(n: u8) -> f64 {
     // OPLL uses a small multiplier table. This clean-room approximation keeps
     // multiplier 0 musically useful instead of making the operator silent.
@@ -505,26 +558,33 @@ fn vrc7_mul_from_nibble(n: u8) -> f64 {
     }
 }
 
+// Map the attack nibble to a positive quadratic per-sample increment;
+// these rates are approximation constants rather than chip clock counts.
 fn vrc7_attack_rate(n: u8) -> f64 {
     let x = (n & 0x0F) as f64 / 15.0;
     0.000015 + x * x * 0.0065
 }
 
+// Map the decay nibble to a positive quadratic per-sample decrement.
 fn vrc7_decay_rate(n: u8) -> f64 {
     let x = (n & 0x0F) as f64 / 15.0;
     0.000004 + x * x * 0.0016
 }
 
+// Map the release nibble to a positive quadratic per-sample decrement.
 fn vrc7_release_rate(n: u8) -> f64 {
     let x = (n & 0x0F) as f64 / 15.0;
     0.000003 + x * x * 0.0012
 }
 
+// Map the sustain nibble from full level down to a small positive floor.
 fn vrc7_sustain_level(n: u8) -> f64 {
     // 0 is a high sustain level, 15 is close to silence.
     1.0 - ((n & 0x0F) as f64 / 15.0) * 0.92
 }
 
+// Evaluate a sine at a cycle-based phase, optionally silencing its negative
+// half for the alternate operator waveform.
 fn vrc7_wave(phase: f64, half_sine: bool) -> f64 {
     let s = (phase * std::f64::consts::TAU).sin();
     if half_sine && s < 0.0 {
@@ -550,6 +610,8 @@ struct Vrc7SlotPatch {
 }
 
 impl Vrc7SlotPatch {
+    // Decode operator multiplier, gains, envelope rates and modulation flags
+    // from patch bytes into the floating-point approximation parameters.
     fn from_regs(flags_mul: u8, total_level: f64, ar_dr: u8, sl_rr: u8, half_sine: bool) -> Self {
         Self {
             mul: vrc7_mul_from_nibble(flags_mul),
@@ -577,6 +639,8 @@ struct Vrc7Patch {
 }
 
 impl Vrc7Patch {
+    // Build modulator/carrier slots from an eight-byte patch and derive
+    // feedback, modulation depth and brightness using fixed scaling rules.
     fn from_regs(regs: &[u8; 8]) -> Self {
         let mod_total = 1.0 - (((regs[2] & 0x3F) as f64 / 63.0) * 0.92);
         let mod_slot =
@@ -636,6 +700,7 @@ struct Vrc7SlotState {
 }
 
 impl Default for Vrc7SlotState {
+    // Start an operator off with zero envelope, phase and previous output.
     fn default() -> Self {
         Self {
             phase: 0.0,
@@ -647,6 +712,7 @@ impl Default for Vrc7SlotState {
 }
 
 impl Vrc7SlotState {
+    // Restart phase and envelope at zero in Attack and clear the old output.
     fn note_on(&mut self) {
         self.phase = 0.0;
         self.env = 0.0;
@@ -654,12 +720,17 @@ impl Vrc7SlotState {
         self.last_output = 0.0;
     }
 
+    // Enter Release for an active operator while leaving an already-off
+    // operator unchanged.
     fn note_off(&mut self) {
         if self.eg_phase != Vrc7EgPhase::Off {
             self.eg_phase = Vrc7EgPhase::Release;
         }
     }
 
+    // Advance Attack/Decay/Sustain/Release by one sample using optional block
+    // scaling, then apply total level and amplitude modulation. Rates are
+    // per call, so wall-clock envelope duration depends on the sample rate.
     fn clock_envelope(
         &mut self,
         patch: Vrc7SlotPatch,
@@ -714,6 +785,8 @@ impl Vrc7SlotState {
         self.env * patch.total_level * am_gain
     }
 
+    // Advance one operator cycle fraction using frequency multiplier and
+    // optional vibrato; the caller supplies a nonzero sample rate.
     fn advance_phase(&mut self, hz: f64, patch: Vrc7SlotPatch, sample_rate: u32, lfo_vib: f64) {
         let vib = if patch.vib {
             1.0 + lfo_vib * 0.012
@@ -739,6 +812,8 @@ struct Vrc7ChannelState {
 }
 
 impl Default for Vrc7ChannelState {
+    // Initialize an unkeyed channel with silent operators, instrument zero,
+    // maximum attenuation and no feedback history.
     fn default() -> Self {
         Self {
             freq_low: 0,
@@ -756,14 +831,18 @@ impl Default for Vrc7ChannelState {
 }
 
 impl Vrc7ChannelState {
+    // Combine the low register and one high bit into the nine-bit frequency.
     fn fnum(&self) -> u16 {
         self.freq_low as u16 | (((self.freq_high & 0x01) as u16) << 8)
     }
 
+    // Extract the three-bit octave/block field from the high register.
     fn block(&self) -> u8 {
         (self.freq_high >> 1) & 0x07
     }
 
+    // Convert frequency and block fields into the model's base frequency;
+    // zero frequency returns silence without operator advancement.
     fn note_hz(&self) -> f64 {
         let fnum = self.fnum() as f64;
         if fnum <= 0.0 {
@@ -776,10 +855,14 @@ impl Vrc7ChannelState {
         (fnum * 49_716.0 * block_scale) / 524_288.0
     }
 
+    // Replace the low eight frequency bits without retriggering envelopes.
     fn write_low(&mut self, value: u8) {
         self.freq_low = value;
     }
 
+    // Latch high frequency, key and sustain fields. Key-on edges restart
+    // both operators and feedback; key-off edges enter release, while repeated
+    // writes with the same key state do not retrigger.
     fn write_high(&mut self, value: u8) {
         let old_key = self.key_on;
         self.freq_high = value;
@@ -796,11 +879,14 @@ impl Vrc7ChannelState {
         }
     }
 
+    // Split the register into a four-bit instrument index and attenuation.
     fn write_instrument_volume(&mut self, value: u8) {
         self.instrument = (value >> 4) & 0x0F;
         self.volume = value & 0x0F;
     }
 
+    // Keep keyed, releasing or residual-envelope channels active until
+    // both operators are off with zero gain.
     fn is_active(&self) -> bool {
         self.key_on
             || self.mod_slot.eg_phase != Vrc7EgPhase::Off
@@ -809,6 +895,9 @@ impl Vrc7ChannelState {
             || self.car_slot.env > 0.0
     }
 
+    // Advance envelopes and a feedback modulator/carrier pair, then apply
+    // channel attenuation and patch brightness. Zero frequency freezes the
+    // envelopes too; a silent carrier skips phase/feedback advancement.
     fn sample(&mut self, patch: Vrc7Patch, sample_rate: u32, lfo_am: f64, lfo_vib: f64) -> f64 {
         if !self.is_active() {
             return 0.0;
@@ -850,10 +939,14 @@ impl Vrc7ChannelState {
         );
         self.car_slot.last_output = carrier;
 
+        // Treat each volume step as two decibels of attenuation; the maximum
+        // register value attenuates rather than mathematically muting the channel.
         let volume_gain = 10.0_f64.powf(-(self.volume as f64 * 2.0) / 20.0);
         carrier * car_env * volume_gain * patch.brightness
     }
 
+    // Append frequency/key/patch fields, envelopes, envelope phases and
+    // feedback samples. Operator oscillator phases and last outputs are omitted.
     fn snapshot_bytes(&self, out: &mut Vec<u8>) {
         out.push(self.freq_low);
         out.push(self.freq_high);
@@ -882,6 +975,8 @@ struct Vrc7AudioState {
 }
 
 impl Default for Vrc7AudioState {
+    // Clear register shadows, user patch, six channels, write count and LFO
+    // phases; instrument zero will use the programmable user patch.
     fn default() -> Self {
         Self {
             selected_reg: 0,
@@ -896,6 +991,8 @@ impl Default for Vrc7AudioState {
 }
 
 impl Vrc7AudioState {
+    // Decode mirrored address/data ports, mask the selected register to six
+    // bits and count each recognized port write.
     fn write(&mut self, addr: u16, value: u8) -> bool {
         match addr & 0xF030 {
             0x9010 => {
@@ -912,6 +1009,8 @@ impl Vrc7AudioState {
         }
     }
 
+    // Always retain the register shadow, then update user-patch or channel
+    // fields for modeled register ranges; other registers have no audio effect.
     fn write_selected(&mut self, value: u8) {
         let reg = self.selected_reg as usize & (VRC7_REG_COUNT - 1);
         self.regs[reg] = value;
@@ -924,6 +1023,9 @@ impl Vrc7AudioState {
         }
     }
 
+    // Advance shared AM/vibrato LFOs and mix six channels using the user
+    // patch for instrument zero or the synthetic preset table otherwise.
+    // Apply fixed output scaling and i16 clipping.
     fn sample(&mut self, sample_rate: u32) -> i16 {
         self.am_lfo_phase = (self.am_lfo_phase + 6.1 / sample_rate as f64).fract();
         self.vib_lfo_phase = (self.vib_lfo_phase + 6.4 / sample_rate as f64).fract();
@@ -944,6 +1046,8 @@ impl Vrc7AudioState {
         mixed.clamp(i16::MIN as f64, i16::MAX as f64) as i16
     }
 
+    // Append register/user-patch shadows, write count, both LFO phases and
+    // channel records; channel oscillator phases are not serialized.
     fn snapshot_bytes(&self, out: &mut Vec<u8>) {
         out.push(self.selected_reg);
         out.extend_from_slice(&self.regs);
@@ -956,11 +1060,13 @@ impl Vrc7AudioState {
         }
     }
 
+    // Count keyed or releasing/residual-envelope channels for diagnostics.
     fn active_channel_count(&self) -> usize {
         self.channels.iter().filter(|ch| ch.is_active()).count()
     }
 
     #[cfg(test)]
+    // Decode the current programmable patch for field-level test assertions.
     fn user_patch_summary(&self) -> Vrc7Patch {
         Vrc7Patch::from_regs(&self.user_patch)
     }
@@ -991,9 +1097,12 @@ pub struct VrcFamilyMapper {
 }
 
 impl VrcFamilyMapper {
+    // Construct the requested VRC mapper using compatibility submapper zero.
     pub fn new(mapper: u16, prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         Self::new_with_submapper(mapper, 0, prg_rom, chr_rom, mirroring)
     }
+    // Retain mapper/submapper decoding context, allocate work RAM and CHR,
+    // initialize first/final PRG banks and clear IRQ plus both audio models.
     pub fn new_with_submapper(
         mapper: u16,
         submapper: u8,
@@ -1031,12 +1140,17 @@ impl VrcFamilyMapper {
             vrc7_audio: Vrc7AudioState::default(),
         }
     }
+    // Select the mapper IDs using the VRC4-style PRG mode and IRQ decoder.
     fn is_vrc4_like(&self) -> bool {
         matches!(self.mapper, 21 | 23 | 25 | 27)
     }
+    // Suppress VRC IRQ behavior for mapper 22 or any configured submapper
+    // 3/4; this predicate does not further restrict those submapper cases.
     fn is_vrc2(&self) -> bool {
         self.mapper == 22 || matches!(self.submapper, 3 | 4)
     }
+    // Extract two board-dependent CPU address lines into a logical register
+    // selector, using explicit submapper cases before compatibility defaults.
     fn vrc_register_select(&self, addr: u16) -> u8 {
         let (a0, a1) = match (self.mapper, self.submapper) {
             (22, _) | (25, 1 | 3) => (1, 0),
@@ -1053,15 +1167,20 @@ impl VrcFamilyMapper {
         };
         (((addr >> a0) & 1) | (((addr >> a1) & 1) << 1)) as u8
     }
+    // Identify mapper IDs with the implemented VRC6/VRC7 audio paths.
     fn has_exp_audio(&self) -> bool {
         matches!(self.mapper, 24 | 26 | 85)
     }
+    // Select the shared VRC6 path for mapper IDs 24 and 26.
     fn is_vrc6(&self) -> bool {
         matches!(self.mapper, 24 | 26)
     }
+    // Select the VRC7 path for mapper 85.
     fn is_vrc7(&self) -> bool {
         self.mapper == 85
     }
+    // Offer the original CPU address to the VRC6 decoder, then count and
+    // shadow recognized writes. This wrapper applies no extra address-bit swap.
     fn write_vrc6_audio(&mut self, addr: u16, value: u8) -> bool {
         if self.is_vrc6() && self.vrc6_audio.write(addr, value) {
             self.audio_writes = self.audio_writes.saturating_add(1);
@@ -1071,6 +1190,8 @@ impl VrcFamilyMapper {
             false
         }
     }
+    // Offer the address to the VRC7 port decoder and retain a write count
+    // and low-six-address-bit shadow for recognized accesses.
     fn write_vrc7_audio(&mut self, addr: u16, value: u8) -> bool {
         if self.is_vrc7() && self.vrc7_audio.write(addr, value) {
             self.audio_writes = self.audio_writes.saturating_add(1);
@@ -1080,6 +1201,7 @@ impl VrcFamilyMapper {
             false
         }
     }
+    // Return a family-specific scaffold label without changing dispatch.
     fn name_static(&self) -> &'static str {
         match self.mapper {
             21 => "VRC4a/VRC4c scaffold",
@@ -1094,6 +1216,9 @@ impl VrcFamilyMapper {
             _ => "VRC family scaffold",
         }
     }
+    // Build four wrapped 8 KiB PRG selections. VRC6/7 expose three writable
+    // slots plus the final bank; VRC4 mode exchanges the lower selectable
+    // slot with the second-last fixed bank.
     fn prg_windows(&self) -> [usize; 4] {
         let count = bank_count(self.prg_rom.len(), 8 * 1024);
         if self.is_vrc6() || self.is_vrc7() {
@@ -1119,6 +1244,8 @@ impl VrcFamilyMapper {
             ]
         }
     }
+    // For non-VRC2 paths, latch low/high IRQ bytes by address region and
+    // handle control/reload in the $D000 region when dispatch reaches it.
     fn write_vrc_irq(&mut self, addr: u16, value: u8) {
         if self.is_vrc2() {
             return;
@@ -1140,6 +1267,8 @@ impl VrcFamilyMapper {
         }
     }
 
+    // Use the decoded selector for two latch nibbles, control/reload and
+    // acknowledgement. Control bit zero supplies the post-acknowledge enable.
     fn write_vrc4_irq(&mut self, addr: u16, value: u8) {
         if self.is_vrc2() {
             return;
@@ -1166,12 +1295,16 @@ impl VrcFamilyMapper {
 }
 
 impl Mapper for VrcFamilyMapper {
+    // Return the configured mapper ID for cartridge diagnostics.
     fn mapper_id(&self) -> u16 {
         self.mapper
     }
+    // Use the family-specific scaffold name.
     fn mapper_name(&self) -> &'static str {
         self.name_static()
     }
+    // Resolve one of the four modeled CPU ROM slots into a physical 8 KiB
+    // bank; work RAM and registers have no cartridge-ROM bank label.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -1184,6 +1317,8 @@ impl Mapper for VrcFamilyMapper {
             addr as usize & 0x1FFF,
         )
     }
+    // Read the flat 8 KiB work-RAM window or a selected PRG-ROM slot, with
+    // zero returned for other addresses.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -1221,6 +1356,9 @@ impl Mapper for VrcFamilyMapper {
             _ => 0,
         }
     }
+    // Give recognized audio ports priority, then dispatch work RAM, family
+    // PRG/CHR selectors, mirroring fields and IRQ registers. Branch ordering
+    // is significant where board register regions overlap.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1231,6 +1369,8 @@ impl Mapper for VrcFamilyMapper {
         sink: &mut TraceSink,
     ) {
         let mut expansion_audio_write = false;
+        // An accepted sound-register write must not also change a PRG or CHR
+        // bank in the overlapping CPU address range.
         if self.write_vrc6_audio(addr, value) || self.write_vrc7_audio(addr, value) {
             expansion_audio_write = true;
         } else {
@@ -1275,6 +1415,8 @@ impl Mapper for VrcFamilyMapper {
                 0xC000..=0xCFFF if self.is_vrc7() => {
                     self.chr_regs[if addr & 0x0010 != 0 { 5 } else { 4 }] = value;
                 }
+                // VRC7 uses this region for CHR selectors here, so it does not reach
+                // the generic IRQ helper's $D000 control case.
                 0xD000..=0xDFFF if self.is_vrc7() => {
                     self.chr_regs[if addr & 0x0010 != 0 { 7 } else { 6 }] = value;
                 }
@@ -1304,6 +1446,8 @@ impl Mapper for VrcFamilyMapper {
                 _ => {}
             }
         }
+        // The trace category also labels any $9000-region write on an audio
+        // variant as expansion audio, even when it changed a bank instead.
         let kind = if expansion_audio_write
             || (self.has_exp_audio() && (0x9000..=0x9FFF).contains(&addr))
         {
@@ -1329,6 +1473,7 @@ impl Mapper for VrcFamilyMapper {
             ),
         );
     }
+    // Read a selected 1 KiB CHR bank using the eight register slots.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -1337,6 +1482,7 @@ impl Mapper for VrcFamilyMapper {
             addr as usize & 0x03FF,
         )
     }
+    // Write through the same selected 1 KiB bank only for CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let slot = ((addr as usize) / 1024) & 7;
@@ -1344,6 +1490,9 @@ impl Mapper for VrcFamilyMapper {
             write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
         }
     }
+    // For enabled non-VRC2 IRQs, increment per CPU cycle or divide three
+    // PPU-equivalent ticks per CPU cycle by 341. On an eight-bit overflow,
+    // reload plus residual increments and latch the interrupt.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -1360,6 +1509,8 @@ impl Mapper for VrcFamilyMapper {
                 self.irq_prescaler = (total % 341) as u16;
                 total / 341
             };
+            // This chunk update handles the overflow algebra once; it does not
+            // iterate arbitrary numbers of repeated reload periods for huge inputs.
             let next = self.irq_counter as u64 + increments;
             if next >= 0x100 {
                 self.irq_counter = (self.irq_latch as u64 + (next - 0x100)) as u16 & 0x00FF;
@@ -1374,12 +1525,16 @@ impl Mapper for VrcFamilyMapper {
             }
         }
     }
+    // Expose the pending mapper IRQ latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear only the pending latch, preserving timer and enable state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Advance and mix the appropriate VRC6 or VRC7 audio model; other VRC
+    // variants contribute silence.
     fn expansion_audio_sample(&mut self, sample_rate: u32) -> i16 {
         if self.is_vrc6() {
             self.vrc6_audio.sample(sample_rate)
@@ -1389,6 +1544,9 @@ impl Mapper for VrcFamilyMapper {
             0
         }
     }
+    // Report effective PRG slots, CHR registers, IRQ and audio observations.
+    // The mirroring field is only descriptive here: this type inherits the
+    // trait's runtime four-screen policy.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper,
@@ -1405,6 +1563,9 @@ impl Mapper for VrcFamilyMapper {
             self.irq_pending(),
         )
     }
+    // Use a V4-tagged restorable layout for variants without expansion
+    // audio, and a larger observation layout for VRC6/7. Neither layout
+    // includes mutable mirroring; audio layouts also omit some oscillator state.
     fn snapshot_bytes(&self) -> Vec<u8> {
         if !self.has_exp_audio() {
             let mut v = vec![
@@ -1449,6 +1610,9 @@ impl Mapper for VrcFamilyMapper {
         }
         v
     }
+    // Reject VRC6/7 restore. For other variants, validate length, V4 tag and
+    // mapper/submapper before restoring banks, IRQ and RAM; existing mirroring
+    // is retained because it is absent from the payload.
     fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> crate::error::Result<()> {
         if self.has_exp_audio() {
             return Err(crate::error::KurosakiError::SnapshotFormat(
@@ -1503,6 +1667,8 @@ pub struct Namco163Mapper {
 }
 
 impl Namco163Mapper {
+    // Allocate work RAM, CHR and 128-byte internal register/wave RAM, select
+    // initial PRG banks 0/1/2 and clear the IRQ and indirect-port state.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring, battery: bool) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         Self {
@@ -1523,6 +1689,8 @@ impl Namco163Mapper {
             audio_writes: 0,
         }
     }
+    // Wrap the three writable 8 KiB PRG selectors and keep the final ROM
+    // bank fixed in the fourth slot.
     fn prg_windows(&self) -> [usize; 4] {
         let count = bank_count(self.prg_rom.len(), 8 * 1024);
         [
@@ -1535,12 +1703,16 @@ impl Namco163Mapper {
 }
 
 impl Mapper for Namco163Mapper {
+    // Identify the Namco 163 scaffold as mapper 19.
     fn mapper_id(&self) -> u16 {
         19
     }
+    // Return the Namco-specific scaffold label.
     fn mapper_name(&self) -> &'static str {
         "Namco 163 scaffold"
     }
+    // Resolve a CPU ROM address through the selected 8 KiB PRG slot, with
+    // no physical cartridge-ROM label for RAM or register addresses.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -1553,6 +1725,9 @@ impl Mapper for Namco163Mapper {
             addr as usize & 0x1FFF,
         )
     }
+    // Read indirect internal RAM at $4800 with optional seven-bit pointer
+    // increment, expose counter bytes at $5000/$5800, or read work RAM/PRG
+    // windows. Register reads do not acknowledge pending IRQ here.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -1606,6 +1781,9 @@ impl Mapper for Namco163Mapper {
         }
         value
     }
+    // Store internal RAM and IRQ fields or select banks through the modeled
+    // address ranges. $E000-$E7FF selects the RAM pointer; $F800+ only selects
+    // auto-increment. Internal RAM writes are counted as audio observations.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1636,6 +1814,8 @@ impl Mapper for Namco163Mapper {
                 self.prg_ram[idx] = value;
             }
             0x8000..=0xBFFF => self.chr_regs[((addr - 0x8000) / 0x0800) as usize] = value,
+            // Four address groups wrap across three PRG registers in this scaffold;
+            // the fourth group therefore aliases register zero.
             0xC000..=0xDFFF => self.prg_regs[((addr - 0xC000) / 0x0800) as usize % 3] = value,
             0xE000..=0xE7FF => self.ram_addr = value & 0x7F,
             0xF800..=0xFFFF => self.ram_auto_inc = value & 0x80 != 0,
@@ -1662,6 +1842,7 @@ impl Mapper for Namco163Mapper {
             ),
         );
     }
+    // Read a wrapped 1 KiB CHR bank selected by the address's register slot.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -1670,6 +1851,7 @@ impl Mapper for Namco163Mapper {
             addr as usize & 0x03FF,
         )
     }
+    // Write through the matching 1 KiB bank selection only for CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let slot = ((addr as usize) / 1024) & 7;
@@ -1677,6 +1859,9 @@ impl Mapper for Namco163Mapper {
             write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
         }
     }
+    // Add the CPU-cycle chunk, latch IRQ when the sum reaches $8000 and retain
+    // the low 15 bits. The chunk is narrowed to u16; this is not a general
+    // arbitrary-u64 elapsed-time update.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -1698,12 +1883,16 @@ impl Mapper for Namco163Mapper {
             }
         }
     }
+    // Expose the pending mapper interrupt latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear the pending latch without changing enable or counter state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Report bank registers, diagnostic metadata and pending IRQ. The
+    // mirroring string does not override the trait's four-screen runtime policy.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             19,
@@ -1718,6 +1907,9 @@ impl Mapper for Namco163Mapper {
             self.irq_pending(),
         )
     }
+    // Append port/IRQ fields, audio-write count, bank registers, internal/work
+    // RAM and writable CHR. Audio synthesis, battery-RAM exposure and private
+    // restore are not overridden by this scaffold.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.ram_addr,
@@ -1759,6 +1951,8 @@ pub struct Sunsoft5bMapper {
 }
 
 impl Sunsoft5bMapper {
+    // Allocate backing, initialize first/final PRG banks and clear command,
+    // IRQ and audio-register observation state.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring, battery: bool) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         let c = bank_count(prg_rom.len(), 8 * 1024);
@@ -1780,6 +1974,8 @@ impl Sunsoft5bMapper {
             audio_writes: 0,
         }
     }
+    // Use PRG registers 0-2 plus a fixed final 8 KiB ROM bank. Register 3 is
+    // retained but does not affect these windows or the flat RAM window.
     fn prg_windows(&self) -> [usize; 4] {
         let c = bank_count(self.prg_rom.len(), 8 * 1024);
         [
@@ -1792,12 +1988,16 @@ impl Sunsoft5bMapper {
 }
 
 impl Mapper for Sunsoft5bMapper {
+    // Identify the FME-7/5B scaffold as mapper 69.
     fn mapper_id(&self) -> u16 {
         69
     }
+    // Return the Sunsoft family scaffold label.
     fn mapper_name(&self) -> &'static str {
         "Sunsoft FME-7/5B scaffold"
     }
+    // Resolve a CPU ROM address through the selected 8 KiB PRG slot, with
+    // no physical cartridge-ROM label for RAM or register addresses.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -1810,6 +2010,8 @@ impl Mapper for Sunsoft5bMapper {
             addr as usize & 0x1FFF,
         )
     }
+    // Read the flat 8 KiB work-RAM window or one of four modeled PRG-ROM
+    // slots; other addresses return zero.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -1847,6 +2049,9 @@ impl Mapper for Sunsoft5bMapper {
             _ => 0,
         }
     }
+    // Latch a command at $8000-$9FFF and apply bank/mirroring/IRQ data at
+    // $A000-$BFFF. The separate audio address/data regions retain shadows
+    // and trace writes but do not implement an expansion sample generator.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1863,6 +2068,8 @@ impl Mapper for Sunsoft5bMapper {
                 8 => self.prg_regs[0] = value,
                 9 => self.prg_regs[1] = value,
                 10 => self.prg_regs[2] = value,
+                // Retain command eleven's data in the fourth shadow register even though
+                // the effective upper PRG window stays fixed to the final ROM bank.
                 11 => self.prg_regs[3] = value,
                 12 => {
                     self.mirroring = if value & 1 == 0 {
@@ -1920,6 +2127,7 @@ impl Mapper for Sunsoft5bMapper {
             ),
         );
     }
+    // Read a wrapped 1 KiB CHR bank selected by the address's register slot.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -1928,6 +2136,7 @@ impl Mapper for Sunsoft5bMapper {
             addr as usize & 0x03FF,
         )
     }
+    // Write through the matching 1 KiB bank selection only for CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let slot = ((addr as usize) / 1024) & 7;
@@ -1935,6 +2144,9 @@ impl Mapper for Sunsoft5bMapper {
             write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
         }
     }
+    // Decrement an enabled positive counter by at most its remaining value
+    // and latch IRQ on reaching zero. There is no automatic reload or wrap;
+    // a zero counter remains idle until software changes it.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -1956,12 +2168,16 @@ impl Mapper for Sunsoft5bMapper {
             }
         }
     }
+    // Expose the pending mapper interrupt latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear the pending latch without changing enable or counter state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Report bank registers, diagnostic metadata and pending IRQ. The
+    // mirroring string does not override the trait's four-screen runtime policy.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             69,
@@ -1976,6 +2192,9 @@ impl Mapper for Sunsoft5bMapper {
             self.irq_pending(),
         )
     }
+    // Serialize command/IRQ/audio fields, bank and audio shadows, work RAM
+    // and optional CHR RAM. Mutable mirroring is omitted; battery export
+    // and private restore remain unsupported through the trait defaults.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.command,
@@ -2015,6 +2234,8 @@ pub struct BandaiFcgMapper {
 }
 
 impl BandaiFcgMapper {
+    // Retain the mapper ID and battery/header metadata, allocate backing
+    // and clear PRG/CHR selectors, IRQ and EEPROM-observation count.
     pub fn new(
         mapper: u16,
         prg_rom: Vec<u8>,
@@ -2042,12 +2263,16 @@ impl BandaiFcgMapper {
 }
 
 impl Mapper for BandaiFcgMapper {
+    // Return the configured FCG variant mapper ID.
     fn mapper_id(&self) -> u16 {
         self.mapper
     }
+    // Return the Bandai FCG scaffold label.
     fn mapper_name(&self) -> &'static str {
         "Bandai FCG scaffold"
     }
+    // Convert the selectable lower or final fixed upper 16 KiB PRG window
+    // into a physical 8 KiB ROM label.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         let (bank, offset) = match addr {
             0x8000..=0xBFFF => (self.prg_bank as usize, addr as usize - 0x8000),
@@ -2059,6 +2284,8 @@ impl Mapper for BandaiFcgMapper {
         };
         physical_bank_8k(self.prg_rom.len(), 16 * 1024, bank, offset)
     }
+    // Read flat work RAM, a selectable lower 16 KiB ROM bank or the fixed
+    // final upper bank. No EEPROM read protocol is modeled.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -2084,6 +2311,9 @@ impl Mapper for BandaiFcgMapper {
             _ => 0,
         }
     }
+    // Decode the scaffold's broad RAM/bank/mirroring/IRQ regions. High-counter
+    // writes also increment the EEPROM-event count; this is observation
+    // metadata rather than an EEPROM serial protocol or stored EEPROM image.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -2116,6 +2346,8 @@ impl Mapper for BandaiFcgMapper {
             0xF000..=0xF7FF => self.irq_counter = (self.irq_counter & 0xFF00) | value as u16,
             0xF800..=0xFFFF => {
                 self.irq_counter = (self.irq_counter & 0x00FF) | ((value as u16) << 8);
+                // Count the observed high-counter write; no EEPROM bit-stream state
+                // machine is advanced by this assignment.
                 self.eeprom_events = self.eeprom_events.saturating_add(1);
             }
             _ => {}
@@ -2134,6 +2366,7 @@ impl Mapper for BandaiFcgMapper {
             ),
         );
     }
+    // Read a wrapped 1 KiB CHR bank selected by the address's register slot.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -2142,6 +2375,7 @@ impl Mapper for BandaiFcgMapper {
             addr as usize & 0x03FF,
         )
     }
+    // Write through the matching 1 KiB bank selection only for CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let slot = ((addr as usize) / 1024) & 7;
@@ -2149,6 +2383,9 @@ impl Mapper for BandaiFcgMapper {
             write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
         }
     }
+    // Decrement an enabled positive counter by at most its remaining value
+    // and latch IRQ on reaching zero. There is no automatic reload or wrap;
+    // a zero counter remains idle until software changes it.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -2170,12 +2407,17 @@ impl Mapper for BandaiFcgMapper {
             }
         }
     }
+    // Expose the pending mapper interrupt latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear the pending latch without changing enable or counter state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Describe logical 16 KiB PRG selections, CHR registers, IRQ and EEPROM
+    // observations. Stored mirroring remains diagnostic rather than a runtime
+    // override, and the battery flag alone does not expose sidecar RAM.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper,
@@ -2193,6 +2435,8 @@ impl Mapper for BandaiFcgMapper {
             self.irq_pending(),
         )
     }
+    // Append mapper/PRG/IRQ fields, EEPROM-event count, CHR registers and RAM.
+    // The type has no private restore decoder and omits mutable mirroring.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.mapper as u8,
@@ -2228,6 +2472,8 @@ pub struct JalecoSs88006Mapper {
 }
 
 impl JalecoSs88006Mapper {
+    // Allocate work/CHR backing, initialize PRG selectors 0/1/2 and clear
+    // the counter and IRQ flags.
     pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring, battery: bool) -> Self {
         let (chr, chr_ram) = ensure_chr(chr_rom);
         Self {
@@ -2244,6 +2490,8 @@ impl JalecoSs88006Mapper {
             irq_pending_flag: false,
         }
     }
+    // Wrap the three writable 8 KiB PRG selectors and fix the last ROM bank
+    // in the uppermost slot.
     fn prg_windows(&self) -> [usize; 4] {
         let c = bank_count(self.prg_rom.len(), 8 * 1024);
         [
@@ -2256,12 +2504,16 @@ impl JalecoSs88006Mapper {
 }
 
 impl Mapper for JalecoSs88006Mapper {
+    // Identify the SS88006 scaffold as mapper 18.
     fn mapper_id(&self) -> u16 {
         18
     }
+    // Return the Jaleco-specific scaffold label.
     fn mapper_name(&self) -> &'static str {
         "Jaleco SS88006 scaffold"
     }
+    // Resolve a CPU ROM address through the selected 8 KiB PRG slot, with
+    // no physical cartridge-ROM label for RAM or register addresses.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -2274,6 +2526,8 @@ impl Mapper for JalecoSs88006Mapper {
             addr as usize & 0x1FFF,
         )
     }
+    // Read the flat 8 KiB work-RAM window or one of four modeled PRG-ROM
+    // slots; other addresses return zero.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -2311,6 +2565,9 @@ impl Mapper for JalecoSs88006Mapper {
             _ => 0,
         }
     }
+    // Route broad address regions to whole-byte PRG/CHR selectors and low/
+    // high counter fields; the final region controls IRQ enable. This decoder
+    // does not assemble the bank registers through nibble writes.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -2355,6 +2612,7 @@ impl Mapper for JalecoSs88006Mapper {
             ),
         );
     }
+    // Read a wrapped 1 KiB CHR bank selected by the address's register slot.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -2363,6 +2621,7 @@ impl Mapper for JalecoSs88006Mapper {
             addr as usize & 0x03FF,
         )
     }
+    // Write through the matching 1 KiB bank selection only for CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let slot = ((addr as usize) / 1024) & 7;
@@ -2370,6 +2629,9 @@ impl Mapper for JalecoSs88006Mapper {
             write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
         }
     }
+    // Decrement an enabled positive counter by at most its remaining value
+    // and latch IRQ on reaching zero. There is no automatic reload or wrap;
+    // a zero counter remains idle until software changes it.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -2391,12 +2653,16 @@ impl Mapper for JalecoSs88006Mapper {
             }
         }
     }
+    // Expose the pending mapper interrupt latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear the pending latch without changing enable or counter state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Report bank registers, diagnostic metadata and pending IRQ. The
+    // mirroring string does not override the trait's four-screen runtime policy.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             18,
@@ -2408,6 +2674,8 @@ impl Mapper for JalecoSs88006Mapper {
             self.irq_pending(),
         )
     }
+    // Append IRQ/battery fields, counter, bank registers and work/CHR RAM
+    // for observation; battery-RAM exposure and restore remain trait defaults.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.irq_enabled as u8,
@@ -2443,6 +2711,8 @@ pub struct BoardScaffoldMapper {
 }
 
 impl BoardScaffoldMapper {
+    // Load the board's registry label and allocate common RAM/CHR backing with
+    // initial first/final PRG banks, zero control and disabled IRQ.
     pub fn new(mapper: u16, prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring) -> Self {
         let spec = mapper_spec(mapper);
         let (chr, chr_ram) = ensure_chr(chr_rom);
@@ -2463,6 +2733,7 @@ impl BoardScaffoldMapper {
             irq_pending_flag: false,
         }
     }
+    // Wrap all four stored 8 KiB PRG selectors to the available ROM banks.
     fn prg_windows(&self) -> [usize; 4] {
         let c = bank_count(self.prg_rom.len(), 8 * 1024);
         [
@@ -2475,12 +2746,16 @@ impl BoardScaffoldMapper {
 }
 
 impl Mapper for BoardScaffoldMapper {
+    // Retain the cartridge mapper ID associated with this common scaffold.
     fn mapper_id(&self) -> u16 {
         self.mapper
     }
+    // Identify the implementation as a shared board-family scaffold.
     fn mapper_name(&self) -> &'static str {
         "Board-family scaffold"
     }
+    // Resolve a CPU ROM address through the selected 8 KiB PRG slot, with
+    // no physical cartridge-ROM label for RAM or register addresses.
     fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return None;
@@ -2493,6 +2768,8 @@ impl Mapper for BoardScaffoldMapper {
             addr as usize & 0x1FFF,
         )
     }
+    // Read the flat 8 KiB work-RAM window or one of four modeled PRG-ROM
+    // slots; other addresses return zero.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -2530,6 +2807,9 @@ impl Mapper for BoardScaffoldMapper {
             _ => 0,
         }
     }
+    // Apply the shared bank/control/counter address layout without branching
+    // on mapper ID. Only PRG registers 0/1 are written here; control is stored
+    // for observation and does not alter bank selection.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -2549,6 +2829,8 @@ impl Mapper for BoardScaffoldMapper {
             0xA000..=0xAFFF => self.prg_regs[1] = value,
             0xB000..=0xEFFF => self.chr_regs[((addr - 0xB000) / 0x0800) as usize % 8] = value,
             0xF000..=0xF7FF => self.irq_counter = (self.irq_counter & 0xFF00) | value as u16,
+            // In this shared decoder, the same high-byte write contains both the
+            // counter's bit 15 and its IRQ-enable flag.
             0xF800..=0xFFFF => {
                 self.irq_counter = (self.irq_counter & 0x00FF) | ((value as u16) << 8);
                 self.irq_enabled = value & 0x80 != 0;
@@ -2575,6 +2857,7 @@ impl Mapper for BoardScaffoldMapper {
             ),
         );
     }
+    // Read a wrapped 1 KiB CHR bank selected by the address's register slot.
     fn read_chr(&mut self, addr: u16) -> u8 {
         read_bank(
             &self.chr,
@@ -2583,6 +2866,7 @@ impl Mapper for BoardScaffoldMapper {
             addr as usize & 0x03FF,
         )
     }
+    // Write through the matching 1 KiB bank selection only for CHR RAM.
     fn write_chr(&mut self, addr: u16, value: u8) {
         if self.chr_ram {
             let slot = ((addr as usize) / 1024) & 7;
@@ -2590,6 +2874,9 @@ impl Mapper for BoardScaffoldMapper {
             write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
         }
     }
+    // Decrement an enabled positive counter by at most its remaining value
+    // and latch IRQ on reaching zero. There is no automatic reload or wrap;
+    // a zero counter remains idle until software changes it.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -2611,12 +2898,16 @@ impl Mapper for BoardScaffoldMapper {
             }
         }
     }
+    // Expose the pending mapper interrupt latch.
     fn irq_pending(&self) -> bool {
         self.irq_pending_flag
     }
+    // Clear the pending latch without changing enable or counter state.
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
+    // Report bank registers, diagnostic metadata and pending IRQ. The
+    // mirroring string does not override the trait's four-screen runtime policy.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             self.mapper,
@@ -2628,6 +2919,8 @@ impl Mapper for BoardScaffoldMapper {
             self.irq_pending(),
         )
     }
+    // Append mapper/control/IRQ fields, all bank registers and writable RAM.
+    // The representation supports observation; private restore is not implemented.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.mapper as u8,
@@ -2650,12 +2943,16 @@ impl Mapper for BoardScaffoldMapper {
 mod vrc7_audio_tests {
     use super::*;
 
+    // Write a register through address/data ports and require both accesses
+    // to be accepted by the decoder.
     fn write_vrc7_reg(vrc7: &mut Vrc7AudioState, reg: u8, value: u8) {
         assert!(vrc7.write(0x9010, reg));
         assert!(vrc7.write(0x9030, value));
     }
 
     #[test]
+    // Check shadow register, combined frequency, key state, instrument and
+    // active-channel count after programming one channel.
     fn vrc7_register_port_latches_and_updates_channel() {
         let mut vrc7 = Vrc7AudioState::default();
         write_vrc7_reg(&mut vrc7, 0x10, 0x80);
@@ -2669,6 +2966,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Require at least one nonzero sample from a keyed preset channel within
+    // a bounded sample loop; no waveform or pitch reference is compared.
     fn vrc7_key_on_outputs_nonzero_samples() {
         let mut vrc7 = Vrc7AudioState::default();
         write_vrc7_reg(&mut vrc7, 0x10, 0x80);
@@ -2685,6 +2984,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Program all user-patch bytes and check selected operator flags plus
+    // modulation/feedback bounds; exact envelope-rate values are not asserted.
     fn vrc7_user_patch_decodes_slot_flags_and_rates() {
         let mut vrc7 = Vrc7AudioState::default();
         write_vrc7_reg(&mut vrc7, 0x00, 0xF1); // AM + VIB + sustain + KSR, mul=1
@@ -2707,6 +3008,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Build a nonzero carrier envelope, clear key-on and check immediate
+    // Release state plus low gain after one second of modeled samples.
     fn vrc7_key_off_enters_release_and_fades() {
         let mut vrc7 = Vrc7AudioState::default();
         write_vrc7_reg(&mut vrc7, 0x10, 0xA0);
@@ -2725,6 +3028,7 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Check the $9018/$9038 address/data mirrors by reading the updated shadow.
     fn vrc7_audio_ports_accept_common_low_address_mirrors() {
         let mut vrc7 = Vrc7AudioState::default();
         assert!(vrc7.write(0x9018, 0x10));
@@ -2732,6 +3036,8 @@ mod vrc7_audio_tests {
         assert_eq!(vrc7.regs[0x10], 0x80);
     }
     #[test]
+    // Program VRC7 through mapper CPU writes, require nonzero expansion
+    // samples and check the diagnostic active-channel count.
     fn vrc_family_mapper_routes_vrc7_audio_ports() {
         let mut mapper = VrcFamilyMapper::new(
             85,
@@ -2757,6 +3063,8 @@ mod vrc7_audio_tests {
         assert!(mapper.debug_state().name.contains("vrc7_active=1"));
     }
 
+    // Fill each original synthetic 8 KiB PRG bank with its own ID so reads
+    // reveal selected bank windows without executing a game.
     fn marker_banks(count: usize) -> Vec<u8> {
         let mut prg = Vec::new();
         for bank in 0..count {
@@ -2765,6 +3073,8 @@ mod vrc7_audio_tests {
         prg
     }
 
+    // Fill original synthetic 1 KiB CHR banks with distinct ID bytes for
+    // address-routing assertions.
     fn marker_chr_1k(count: usize) -> Vec<u8> {
         let mut chr = Vec::new();
         for bank in 0..count {
@@ -2774,6 +3084,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Write all eight VRC7 CHR selector addresses, then check register
+    // summaries and the first byte read through each pattern-memory slot.
     fn vrc7_chr_registers_use_konami_1k_addresses() {
         let mut mapper = VrcFamilyMapper::new(
             85,
@@ -2806,6 +3118,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Check three independently selected VRC7 PRG windows and require audio
+    // port writes to preserve the $C000 window. No boot stub is executed here.
     fn vrc7_9000_selects_c000_prg_window_for_kitaqfc_boot_stub() {
         let mut mapper = VrcFamilyMapper::new(
             85,
@@ -2838,6 +3152,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Check that mapper 24's $C000 register selects the corresponding PRG
+    // window using a synthetic bank-ID read.
     fn vrc6_c000_selects_c000_prg_window_for_kitaqfc_boot_stub() {
         let mut mapper = VrcFamilyMapper::new(
             24,
@@ -2854,6 +3170,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Write IRQ-looking addresses on mapper 22 and clock a large chunk,
+    // requiring the VRC2 IRQ gate to keep the pending flag clear.
     fn vrc2_never_asserts_mapper_irq() {
         let mut mapper = VrcFamilyMapper::new_with_submapper(
             22,
@@ -2871,6 +3189,8 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Check mapper 23/submapper 1 at the modeled two-cycle overflow and
+    // 113-plus-one-cycle prescaler boundary using direct clock calls.
     fn vrc4_cycle_and_scanline_irq_modes_overflow_at_expected_boundaries() {
         let mut sink = TraceSink::default();
         let cfg = TraceConfig::none();
@@ -2906,6 +3226,9 @@ mod vrc7_audio_tests {
     }
 
     #[test]
+    // Seed banks and pending IRQ, restore the V4 payload and compare its
+    // bytes plus PRG/CHR summaries. This does not test post-restore execution
+    // or state omitted from the serialized payload, such as mirroring.
     fn vrc4_versioned_snapshot_round_trips_mapper_state() {
         let mut mapper = VrcFamilyMapper::new_with_submapper(
             23,

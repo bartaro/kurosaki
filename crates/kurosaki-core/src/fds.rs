@@ -10,6 +10,9 @@ pub const FDS_CHR_RAM_SIZE: usize = 0x2000;
 const FDS_MAGIC: &[u8; 4] = b"FDS\x1A";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// One complete parsed disk file with its side and boot-ID classification.
+// Payload bytes are omitted from serialization; this record is not a saved
+// copy of the disk media.
 pub struct FdsDiskFile {
     pub side: u8,
     pub number: u8,
@@ -24,6 +27,8 @@ pub struct FdsDiskFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Parsed file inventory and warnings with original input bytes retained
+// in memory. Raw media is omitted from serialization.
 pub struct FdsDiskImage {
     pub side_count: u8,
     pub has_header: bool,
@@ -34,6 +39,9 @@ pub struct FdsDiskImage {
 }
 
 impl FdsDiskImage {
+    // Parse optional-header FDS data into ordered file records while retaining
+    // the original bytes. Honor a nonzero header side count; otherwise infer a
+    // ceiling count from length. Incomplete sides produce warnings, not padding.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
             return Err(KurosakiError::InvalidRom("empty FDS image".to_string()));
@@ -53,6 +61,8 @@ impl FdsDiskImage {
         } else {
             inferred_sides
         };
+        // Cap representable sides at 255. A header count can exceed the available
+        // sides or exclude extra trailing sides; parsing stops when input runs out.
         let side_count = header_sides.min(255);
         let mut warnings = Vec::new();
         if available_side_bytes < side_count * FDS_SIDE_SIZE {
@@ -81,6 +91,10 @@ impl FdsDiskImage {
         })
     }
 
+    // Build a 32 KiB FF-filled direct-boot image from every boot PRG file in
+    // parse order, including files on later sides. Skip starts below $6000, clip
+    // the upper boundary and let later files overwrite overlaps, then fix the
+    // recognized KITAQFC NMI-vector stub without running it.
     pub fn boot_prg_ram(&self) -> Vec<u8> {
         let mut prg = vec![0xFF; FDS_PRG_RAM_SIZE];
         for file in self.files.iter().filter(|f| f.boot && f.file_type == 0) {
@@ -98,6 +112,9 @@ impl FdsDiskImage {
         prg
     }
 
+    // Build zero-filled 8 KiB CHR RAM from boot files of type 1 or 2 on all
+    // parsed sides. Use load addresses directly, clip at the upper boundary and
+    // let later records replace overlapping bytes.
     pub fn boot_chr_ram(&self) -> Vec<u8> {
         let mut chr = vec![0; FDS_CHR_RAM_SIZE];
         for file in self
@@ -115,6 +132,8 @@ impl FdsDiskImage {
         chr
     }
 
+    // Rebuild the direct-boot PRG image and read its little-endian $DFFC vector.
+    // Reject only $0000 and $FFFF; other targets are returned without code validation.
     pub fn fast_boot_pc(&self) -> Option<u16> {
         let prg = self.boot_prg_ram();
         let offset = 0xDFFCusize - FDS_PRG_RAM_BASE as usize;
@@ -130,6 +149,10 @@ impl FdsDiskImage {
     }
 }
 
+// Recognize selected opcode fields of the KITAQFC $DFC0 startup stub when
+// the NMI vector points there and reset does not. Copy its immediate NMI target
+// into $DFFA; leave all code and reset bytes intact. The caller supplies the
+// full boot RAM image; this is pattern recognition, not instruction execution.
 fn apply_license_bypass_vector_fixup(prg: &mut [u8]) {
     let Some(stub_offset) = fds_prg_offset(0xDFC0) else {
         return;
@@ -175,6 +198,8 @@ fn apply_license_bypass_vector_fixup(prg: &mut [u8]) {
     prg[nmi_vector_offset + 1] = real_nmi_hi;
 }
 
+// Translate an address in the allocated $6000-based 32 KiB buffer to an
+// offset. This buffer range is independent of the runtime BIOS overlay.
 fn fds_prg_offset(addr: u16) -> Option<usize> {
     if addr < FDS_PRG_RAM_BASE {
         return None;
@@ -187,6 +212,10 @@ fn fds_prg_offset(addr: u16) -> Option<usize> {
     }
 }
 
+// Walk disk-info, count, header and data blocks at the expected byte offsets.
+// Append only complete files, mark boot eligibility by the side-specific ID
+// limit, and stop the side at its first malformed file with a warning. This
+// parser does not validate media CRCs or search for replacement block markers.
 fn parse_side(
     side: u8,
     data: &[u8],
@@ -277,6 +306,8 @@ fn parse_side(
     Ok(())
 }
 
+// Keep printable ASCII and spaces, replace other bytes with a dot, and
+// remove trailing whitespace while preserving leading spaces.
 fn ascii_trim(bytes: &[u8]) -> String {
     let s: String = bytes
         .iter()
@@ -296,6 +327,8 @@ mod tests {
     use super::*;
 
     #[test]
+    // Construct an original two-file disk fixture and check parsed file count,
+    // reset-vector extraction and initial CHR bytes without executing a BIOS.
     fn parses_kitaqfc_style_fds_blocks_and_boot_vectors() {
         let mut side = vec![0; FDS_SIDE_SIZE];
         side[0] = 0x01;
@@ -342,6 +375,8 @@ mod tests {
     }
 
     #[test]
+    // Construct the KITAQFC startup pattern and verify NMI-vector rewriting
+    // while retaining the direct-boot reset target. No disk timing is exercised.
     fn direct_boot_applies_kitaqfc_license_bypass_nmi_vector() {
         let mut side = vec![0; FDS_SIDE_SIZE];
         side[0] = 0x01;

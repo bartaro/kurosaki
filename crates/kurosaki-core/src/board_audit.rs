@@ -5,6 +5,7 @@ use serde_json::Value;
 const BANK_SIZE: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+// A machine-readable board-layout finding with human-readable explanation.
 pub struct BoardAuditDiagnostic {
     pub code: String,
     pub severity: String,
@@ -12,6 +13,8 @@ pub struct BoardAuditDiagnostic {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Result of the SUROM layout checks, including optional metadata comparison.
+// The pass flag covers only this contract, not electrical or runtime correctness.
 pub struct BoardAuditReport {
     pub schema: String,
     pub schema_version: u32,
@@ -36,6 +39,9 @@ pub struct BoardAuditReport {
     pub diagnostics: Vec<BoardAuditDiagnostic>,
 }
 
+// Check the specific surom512 layout contract from cartridge bytes and optional
+// metadata. Other requested boards fail this contract. Replica equality and
+// nonempty reset tails are structural checks, not proof of executed reset code.
 pub fn audit_board(
     cart: &Cartridge,
     expected_board: &str,
@@ -52,14 +58,20 @@ pub fn audit_board(
     } else {
         (false, false)
     };
+    // For each odd physical bank, require at least one non-FF byte in its final
+    // 64 bytes. This presence test does not decode or validate a reset routine.
     let reset_tail_coverage_odd_banks = enough_banks
         && (1..32).step_by(2).all(|bank| {
             let tail = &cart.prg_rom[(bank + 1) * BANK_SIZE - 64..(bank + 1) * BANK_SIZE];
             tail.iter().any(|&byte| byte != 0xff)
         });
 
+    // Absent metadata is reported as None and does not fail the final policy;
+    // supplied metadata must satisfy the specific logical-to-physical mapping.
     let metadata_mapping_equal = metadata.map(metadata_has_surom_mapping);
     let mut diagnostics = Vec::new();
+    // Check mapper and declared ROM/RAM sizes. Battery presence and the inferred
+    // board-profile label are reported separately and do not enter this predicate.
     let header_matches = cart.info.mapper == 1
         && cart.info.prg_rom_size == 512 * 1024
         && cart.info.chr_rom_size == 0
@@ -131,6 +143,8 @@ pub fn audit_board(
         common_physical_banks: vec![15, 31],
         common_replica_equal,
         vector_replica_equal,
+        // Omit the replica digest from the report; equality was checked directly on
+        // the two complete physical banks above.
         common_replica_sha256: None,
         reset_tail_coverage_odd_banks,
         metadata_mapping_equal,
@@ -140,6 +154,9 @@ pub fn audit_board(
     }
 }
 
+// Require common banks exactly [15,31] and a matching non-common entry for
+// each logical bank 1..30. Extra or duplicate entries are allowed; a matching
+// entry suffices even if another entry for the same bank contradicts it.
 fn metadata_has_surom_mapping(metadata: &Value) -> bool {
     let Some(layout) = metadata.get("bank_layout") else {
         return false;

@@ -40,6 +40,8 @@ pub enum MapperFamily {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Registry-level capability hints for a mapper family. Battery and bank
+// size fields do not replace a particular cartridge header or board audit.
 pub struct MapperSpec {
     pub mapper: u16,
     pub name: String,
@@ -54,6 +56,8 @@ pub struct MapperSpec {
 }
 
 impl MapperSpec {
+    // Construct a probe-only descriptor even for IDs beyond the NES 2.0 range.
+    // Missing capability flags mean unclassified here, not proven absent hardware.
     pub fn generic_probe(mapper: u16) -> Self {
         Self {
             mapper,
@@ -71,6 +75,7 @@ impl MapperSpec {
 }
 
 #[allow(clippy::too_many_arguments)]
+// Build one owned registry record from the static board-family description.
 fn spec(
     mapper: u16,
     name: &str,
@@ -101,6 +106,9 @@ fn spec(
 ///
 /// This is deliberately conservative. It does not claim exactness unless a
 /// KUROSAKI mapper implementation and fixture path exist.
+// Return a mapper-number classification without consulting submapper, ROM
+// sizes or the runtime mapper object. Unlisted IDs receive a generic probe
+// record; this lookup does not instantiate an implementation.
 pub fn mapper_spec(mapper: u16) -> MapperSpec {
     use MapperFamily::*;
     use MapperSupportLevel::*;
@@ -155,10 +163,14 @@ pub fn mapper_spec(mapper: u16) -> MapperSpec {
     }
 }
 
+// Enumerate all 4096 NES 2.0 mapper numbers in ascending order, synthesizing
+// probe records for IDs without explicit entries.
 pub fn all_mapper_specs() -> Vec<MapperSpec> {
     (0..=NES20_MAPPER_ID_MAX).map(mapper_spec).collect()
 }
 
+// Return both Implemented and Scaffold registry entries. Despite this helper
+// name, the list includes implementations with acknowledged accuracy gaps.
 pub fn implemented_mapper_specs() -> Vec<MapperSpec> {
     all_mapper_specs()
         .into_iter()

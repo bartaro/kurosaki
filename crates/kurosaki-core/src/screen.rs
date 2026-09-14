@@ -4,6 +4,8 @@ use crate::ppu::{PpuState, NES_HEIGHT, NES_WIDTH};
 use std::fs;
 use std::path::Path;
 
+// Fixed 64-entry RGB lookup used by screenshot conversion. Emphasis is applied
+// separately below; the table is not a simulation of analog video decoding.
 const NES_RGB: [[u8; 3]; 64] = [
     [102, 102, 102],
     [0, 42, 136],
@@ -71,16 +73,22 @@ const NES_RGB: [[u8; 3]; 64] = [
     [0, 0, 0],
 ];
 
+// Convert the current PPU frame buffer and write a fixed-size RGB PNG.
+// No frame is executed and no parent directory is created; I/O errors propagate.
 pub fn write_emulator_png(emu: &mut Emulator, path: impl AsRef<Path>) -> Result<()> {
     let rgb = emulator_screen_rgb(emu);
     write_rgb_png(path.as_ref(), NES_WIDTH as u32, NES_HEIGHT as u32, &rgb)?;
     Ok(())
 }
 
+// Read the emulator's PPU image without advancing execution. The mutable
+// reference is retained by the API, but this conversion does not modify state.
 pub fn emulator_screen_rgb(emu: &mut Emulator) -> Vec<u8> {
     screen_rgb_from_ppu(&emu.bus.ppu)
 }
 
+// Allocate a packed row-major RGB image for the fixed NES dimensions and
+// convert the existing indexed frame buffer; this does not render another frame.
 pub fn screen_rgb_from_ppu(ppu: &PpuState) -> Vec<u8> {
     let mut rgb = vec![0; NES_WIDTH * NES_HEIGHT * 3];
 
@@ -89,6 +97,8 @@ pub fn screen_rgb_from_ppu(ppu: &PpuState) -> Vec<u8> {
     rgb
 }
 
+// Map each stored palette index through the current PPU mask and RGB table.
+// The caller must provide the complete fixed-size source and destination buffers.
 fn draw_frame_buffer(ppu: &PpuState, rgb: &mut [u8]) {
     for y in 0..NES_HEIGHT {
         for x in 0..NES_WIDTH {
@@ -99,6 +109,9 @@ fn draw_frame_buffer(ppu: &PpuState, rgb: &mut [u8]) {
     }
 }
 
+// Keep the six-bit palette index, apply the current grayscale mask, then
+// approximate emphasis by attenuating other channels by 0.84 for each set bit.
+// This uses the current mask for the whole image, not per-pixel mask history.
 fn nes_rgb(ppu: &PpuState, color_index: u8) -> [u8; 3] {
     let mut index = color_index & 0x3F;
 
@@ -127,6 +140,8 @@ fn nes_rgb(ppu: &PpuState, color_index: u8) -> [u8; 3] {
     color
 }
 
+// Store one RGB triplet using the fixed NES row stride. Coordinates and buffer
+// length are assumed valid; this internal helper performs no clipping.
 fn put_rgb(buf: &mut [u8], x: usize, y: usize, color: [u8; 3]) {
     let i = (y * NES_WIDTH + x) * 3;
     buf[i] = color[0];
@@ -134,6 +149,9 @@ fn put_rgb(buf: &mut [u8], x: usize, y: usize, color: [u8; 3]) {
     buf[i + 2] = color[2];
 }
 
+// Encode RGB8 rows with filter zero and uncompressed DEFLATE blocks inside
+// zlib, then write IHDR, IDAT and IEND. The caller supplies valid positive
+// dimensions and a complete pixel buffer; the destination is replaced directly.
 fn write_rgb_png(path: &Path, width: u32, height: u32, rgb: &[u8]) -> std::io::Result<()> {
     let stride = width as usize * 3;
     let mut raw = Vec::with_capacity((stride + 1) * height as usize);
@@ -147,6 +165,8 @@ fn write_rgb_png(path: &Path, width: u32, height: u32, rgb: &[u8]) -> std::io::R
     zlib.extend_from_slice(&[0x78, 0x01]);
 
     let mut remaining = raw.as_slice();
+    // Stored DEFLATE blocks carry little-endian LEN and its ones' complement,
+    // with the final-block bit set only for the last payload slice.
     while !remaining.is_empty() {
         let len = remaining.len().min(65_535);
         let final_block = len == remaining.len();
@@ -172,6 +192,8 @@ fn write_rgb_png(path: &Path, width: u32, height: u32, rgb: &[u8]) -> std::io::R
     fs::write(path, png)
 }
 
+// Append the big-endian length, four-byte type, payload and CRC over type plus
+// payload. The PNG length field does not participate in the checksum.
 fn png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(kind);
@@ -183,6 +205,7 @@ fn png_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&crc32(&crc_data).to_be_bytes());
 }
 
+// Compute the zlib Adler-32 checksum modulo 65521, starting with A=1 and B=0.
 fn adler32(data: &[u8]) -> u32 {
     let mut a = 1u32;
     let mut b = 0u32;
@@ -195,6 +218,8 @@ fn adler32(data: &[u8]) -> u32 {
     (b << 16) | a
 }
 
+// Compute the reflected PNG CRC-32 using polynomial 0xEDB88320, an all-ones
+// initial value and a final complement.
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
 

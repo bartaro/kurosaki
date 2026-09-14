@@ -13,6 +13,8 @@ const OVERFLOW: u8 = 0x40;
 const NEGATIVE: u8 = 0x80;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+// Serializable CPU registers, counters and the explicit CLI polling delay.
+// Memory/device state lives on Bus rather than in this structure.
 pub struct CpuState {
     pub a: u8,
     pub x: u8,
@@ -28,6 +30,8 @@ pub struct CpuState {
 }
 
 impl Default for CpuState {
+    // Initialize zeroed A/X/Y/PC and counters with SP=$FD and the interrupt
+    // mask/unused status bits set. Loading the reset vector is a separate step.
     fn default() -> Self {
         Self {
             a: 0,
@@ -44,6 +48,8 @@ impl Default for CpuState {
 }
 
 #[derive(Debug, Clone, Copy)]
+// Operand modes shared by arithmetic/load/store helpers. Control-flow
+// instructions resolve their special operands directly in step.
 enum AddrMode {
     Imm,
     Zp,
@@ -57,12 +63,17 @@ enum AddrMode {
 }
 
 #[derive(Debug, Clone, Copy)]
+// Effective address plus the carry into a new 256-byte page. Read helpers
+// use the crossing flag for timing; stores use fixed opcode costs.
 struct ResolvedAddr {
     addr: u16,
     page_crossed: bool,
 }
 
 impl CpuState {
+    // Reset SP/status, read the reset vector using frame zero and the old
+    // cycle timestamp, clear stopped/IRQ-delay state, then set cycles to seven.
+    // A/X/Y and bus memory are retained; device clocks are not advanced here.
     pub fn reset(&mut self, bus: &mut Bus, cfg: TraceConfig, sink: &mut TraceSink) {
         self.sp = 0xFD;
         self.p = IRQ_DISABLE | UNUSED;
@@ -72,6 +83,9 @@ impl CpuState {
         self.cycles = 7;
     }
 
+    // Push the current PC and status with the break bit cleared, mask IRQs,
+    // read the NMI vector and add seven CPU cycles. This helper neither clocks
+    // devices nor executes the handler instruction.
     pub fn service_nmi(
         &mut self,
         bus: &mut Bus,
@@ -92,6 +106,8 @@ impl CpuState {
         }
     }
 
+    // Push PC/status, mask further IRQs and take the IRQ vector with seven
+    // CPU cycles added. IRQ event emission shares the nmi trace selector.
     pub fn service_irq(
         &mut self,
         bus: &mut Bus,
@@ -112,6 +128,10 @@ impl CpuState {
         }
     }
 
+    // Reject a stopped CPU, poll NMI before eligible IRQ, then execute one
+    // instruction, including a handler instruction after interrupt entry. Return
+    // only the instruction cycles: interrupt entry adds to self.cycles but is
+    // not included in the count returned for external device clocking.
     pub fn step(
         &mut self,
         bus: &mut Bus,
@@ -123,6 +143,8 @@ impl CpuState {
             return Err(KurosakiError::CpuStopped("CPU is stopped".to_string()));
         }
         bus.clear_trace_cpu_context();
+        // Consume one pending CLI delay before polling. An NMI still takes
+        // priority, and masked/deferred IRQs do not call take_irq.
         let defer_irq = self.irq_poll_delay != 0;
         self.irq_poll_delay = self.irq_poll_delay.saturating_sub(1);
         if bus.take_nmi() {
@@ -131,6 +153,8 @@ impl CpuState {
             self.service_irq(bus, frame, cfg, sink);
         }
 
+        // After interrupt entry, label the actual handler instruction with its
+        // current physical bank. The bank label is retained through the instruction.
         let pc0 = self.pc;
         let prg_bank0 = bus.mapper.physical_prg_bank_8k(pc0);
         bus.set_trace_cpu_context(pc0, prg_bank0);
@@ -139,6 +163,8 @@ impl CpuState {
         let cycles = match opcode {
             0x00 => {
                 // BRK
+                // BRK has already fetched its opcode; skip its padding byte so the
+                // stacked return PC points two bytes past the original instruction.
                 self.pc = self.pc.wrapping_add(1);
                 self.push_u16(bus, self.pc, frame, cfg, sink);
                 self.push(bus, self.p | BREAK_FLAG | UNUSED, frame, cfg, sink);
@@ -179,6 +205,8 @@ impl CpuState {
             }
             0x20 => {
                 let addr = self.fetch_u16(bus, frame, cfg, sink);
+                // JSR stores the address of its final operand byte. RTS adds one
+                // after pulling this value to resume at the following instruction.
                 self.push_u16(bus, self.pc.wrapping_sub(1), frame, cfg, sink);
                 self.pc = addr;
                 6
@@ -201,6 +229,8 @@ impl CpuState {
                 3
             }
             0x58 => {
+                // CLI schedules the modeled one-instruction IRQ polling delay only
+                // when it actually changes I from set to clear.
                 let was_disabled = self.p & IRQ_DISABLE != 0;
                 self.p &= !IRQ_DISABLE;
                 self.p |= UNUSED;
@@ -229,6 +259,8 @@ impl CpuState {
             }
             0x6C => {
                 let ptr = self.fetch_u16(bus, frame, cfg, sink);
+                // Use the page-wrapped high-byte read for indirect JMP instead of
+                // ordinary 16-bit pointer incrementing.
                 self.pc = bus.read_u16_zp_bug(ptr, frame, self.cycles, cfg, sink);
                 5
             }
@@ -340,6 +372,7 @@ impl CpuState {
                 2
             }
             0x9A => {
+                // TXS copies the stack offset without updating Z/N, unlike TSX.
                 self.sp = self.x;
                 2
             }
@@ -463,10 +496,17 @@ impl CpuState {
 
             _ => {
                 bus.clear_trace_cpu_context();
+                // The opcode fetch already advanced PC. Clear trace context and
+                // return before adding instruction cycles; the caller decides whether
+                // to convert the error into a stopped CPU.
                 return Err(KurosakiError::UnimplementedOpcode { opcode, pc: pc0 });
             }
         };
+        // Add the selected opcode cost after its bus operations. DMA stall
+        // accounting is held on Bus and is not consumed by this CPU step.
         self.cycles += cycles as u64;
+        // Emit instruction context with the starting PC/bank and final
+        // register values at the end-of-instruction CPU timestamp.
         if cfg.cpu {
             let mut event = TraceEvent::new("cpu.instruction", frame, self.cycles);
             event.pc = Some(pc0);
@@ -483,12 +523,15 @@ impl CpuState {
         Ok(cycles)
     }
 
+    // Read the byte at PC through the bus and wrap PC to the next address.
+    // Operand/opcode fetches use the current CPU timestamp without clocking.
     fn fetch(&mut self, bus: &mut Bus, frame: u64, cfg: TraceConfig, sink: &mut TraceSink) -> u8 {
         let v = bus.read(self.pc, frame, self.cycles, cfg, sink);
         self.pc = self.pc.wrapping_add(1);
         v
     }
 
+    // Fetch low then high operand bytes through PC and combine them little-endian.
     fn fetch_u16(
         &mut self,
         bus: &mut Bus,
@@ -501,6 +544,7 @@ impl CpuState {
         lo | (hi << 8)
     }
 
+    // Write a byte to $0100|SP, then decrement SP with eight-bit wrapping.
     fn push(
         &mut self,
         bus: &mut Bus,
@@ -514,12 +558,14 @@ impl CpuState {
         self.sp = self.sp.wrapping_sub(1);
     }
 
+    // Increment SP with eight-bit wrapping, then read the corresponding stack byte.
     fn pull(&mut self, bus: &mut Bus, frame: u64, cfg: TraceConfig, sink: &mut TraceSink) -> u8 {
         self.sp = self.sp.wrapping_add(1);
         let addr = 0x0100 | self.sp as u16;
         bus.read(addr, frame, self.cycles, cfg, sink)
     }
 
+    // Push the high byte before the low byte so the low byte is pulled first.
     fn push_u16(
         &mut self,
         bus: &mut Bus,
@@ -532,6 +578,7 @@ impl CpuState {
         self.push(bus, value as u8, frame, cfg, sink);
     }
 
+    // Pull low then high stack bytes and reconstruct the 16-bit value.
     fn pull_u16(
         &mut self,
         bus: &mut Bus,
@@ -544,6 +591,10 @@ impl CpuState {
         lo | (hi << 8)
     }
 
+    // Consume address operands and resolve the selected mode. Zero-page index
+    // and pointer arithmetic wrap within one byte; absolute indexing wraps at
+    // 16 bits and records page crossing. Immediate mode leaves PC advancement
+    // to read_mode. Indexed dummy bus accesses are not issued by this resolver.
     fn resolve_addr(
         &mut self,
         bus: &mut Bus,
@@ -618,6 +669,9 @@ impl CpuState {
         }
     }
 
+    // Resolve and read the operand with an addressing-mode-specific timing
+    // offset, including indexed page crossing. Advance PC explicitly for an
+    // immediate operand and return both its value and the crossing flag.
     fn read_mode(
         &mut self,
         bus: &mut Bus,
@@ -643,6 +697,8 @@ impl CpuState {
         (v, r.page_crossed)
     }
 
+    // Resolve the destination and write at the current CPU timestamp. Stores
+    // use their caller's fixed cycle count rather than a read-style page penalty.
     fn write_mode(
         &mut self,
         bus: &mut Bus,
@@ -656,6 +712,8 @@ impl CpuState {
         bus.write(r.addr, value, frame, self.cycles, cfg, sink);
     }
 
+    // Update zero/sign flags from one byte and force the unused status bit high,
+    // preserving the other flags.
     fn set_zn(&mut self, value: u8) {
         if value == 0 {
             self.p |= ZERO;
@@ -670,6 +728,8 @@ impl CpuState {
         self.p |= UNUSED;
     }
 
+    // Subtract without storing the result; carry means reg >= value and Z/N
+    // come from the wrapped difference. Overflow is preserved.
     fn compare(&mut self, reg: u8, value: u8) {
         let r = reg.wrapping_sub(value);
         if reg >= value {
@@ -680,6 +740,9 @@ impl CpuState {
         self.set_zn(r);
     }
 
+    // Add the operand and carry to A, deriving carry from the ninth bit and
+    // signed overflow from operand/result sign changes. Store the low byte and
+    // update Z/N; the decimal flag does not select BCD arithmetic.
     fn adc(&mut self, value: u8) {
         // Ricoh 2A03 keeps the decimal flag but omits BCD arithmetic; ADC/SBC are binary.
         let carry = if self.p & CARRY != 0 { 1 } else { 0 };
@@ -699,10 +762,14 @@ impl CpuState {
         self.set_zn(self.a);
     }
 
+    // Use ADC with the complemented operand so carry represents no borrow
+    // and the existing ADC flag calculations implement binary subtraction.
     fn sbc(&mut self, value: u8) {
         self.adc(!value);
     }
 
+    // Set zero from A AND operand, and copy operand bits six/seven into V/N.
+    // A and carry are unchanged; the unused status bit is forced high.
     fn bit(&mut self, value: u8) {
         if self.a & value == 0 {
             self.p |= ZERO;
@@ -722,6 +789,8 @@ impl CpuState {
         self.p |= UNUSED;
     }
 
+    // Shift left, moving original bit seven to carry and updating Z/N from
+    // the low-byte result.
     fn asl_value(&mut self, value: u8) -> u8 {
         if value & 0x80 != 0 {
             self.p |= CARRY;
@@ -733,6 +802,7 @@ impl CpuState {
         r
     }
 
+    // Shift right with zero fill, moving original bit zero to carry and updating Z/N.
     fn lsr_value(&mut self, value: u8) -> u8 {
         if value & 0x01 != 0 {
             self.p |= CARRY;
@@ -744,6 +814,8 @@ impl CpuState {
         r
     }
 
+    // Rotate left through the previous carry, then set carry from original
+    // bit seven and update Z/N.
     fn rol_value(&mut self, value: u8) -> u8 {
         let carry_in = if self.p & CARRY != 0 { 1 } else { 0 };
         if value & 0x80 != 0 {
@@ -756,6 +828,8 @@ impl CpuState {
         r
     }
 
+    // Rotate right through the previous carry, then set carry from original
+    // bit zero and update Z/N.
     fn ror_value(&mut self, value: u8) -> u8 {
         let carry_in = if self.p & CARRY != 0 { 0x80 } else { 0 };
         if value & 0x01 != 0 {
@@ -768,6 +842,9 @@ impl CpuState {
         r
     }
 
+    // Always consume the signed displacement. A taken branch updates PC
+    // relative to the next instruction and costs three or four cycles depending
+    // on page crossing; an untaken branch costs two.
     fn branch(
         &mut self,
         bus: &mut Bus,
@@ -790,6 +867,8 @@ impl CpuState {
         }
     }
 
+    // Load the addressed operand into A and update Z/N.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_lda(
         &mut self,
         bus: &mut Bus,
@@ -804,6 +883,8 @@ impl CpuState {
         self.set_zn(self.a);
         base
     }
+    // Load the addressed operand into A and update Z/N.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_lda_page(
         &mut self,
         bus: &mut Bus,
@@ -818,6 +899,8 @@ impl CpuState {
         self.set_zn(self.a);
         base + p as u8
     }
+    // Load the addressed operand into X and update Z/N.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_ldx(
         &mut self,
         bus: &mut Bus,
@@ -832,6 +915,8 @@ impl CpuState {
         self.set_zn(self.x);
         base
     }
+    // Load the addressed operand into X and update Z/N.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_ldx_page(
         &mut self,
         bus: &mut Bus,
@@ -846,6 +931,8 @@ impl CpuState {
         self.set_zn(self.x);
         base + p as u8
     }
+    // Load the addressed operand into Y and update Z/N.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_ldy(
         &mut self,
         bus: &mut Bus,
@@ -860,6 +947,8 @@ impl CpuState {
         self.set_zn(self.y);
         base
     }
+    // Load the addressed operand into Y and update Z/N.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_ldy_page(
         &mut self,
         bus: &mut Bus,
@@ -874,6 +963,8 @@ impl CpuState {
         self.set_zn(self.y);
         base + p as u8
     }
+    // Store A through the selected addressing mode without changing flags.
+    // Return the supplied fixed cycle count, including any indexed-store cost.
     fn op_sta(
         &mut self,
         bus: &mut Bus,
@@ -886,6 +977,8 @@ impl CpuState {
         self.write_mode(bus, frame, cfg, sink, mode, self.a);
         base
     }
+    // Store X through the selected addressing mode without changing flags.
+    // Return the supplied fixed cycle count, including any indexed-store cost.
     fn op_stx(
         &mut self,
         bus: &mut Bus,
@@ -898,6 +991,8 @@ impl CpuState {
         self.write_mode(bus, frame, cfg, sink, mode, self.x);
         base
     }
+    // Store Y through the selected addressing mode without changing flags.
+    // Return the supplied fixed cycle count, including any indexed-store cost.
     fn op_sty(
         &mut self,
         bus: &mut Bus,
@@ -937,6 +1032,8 @@ impl CpuState {
         5
     }
 
+    // OR the addressed operand into A and update Z/N, preserving carry/overflow.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_ora(
         &mut self,
         bus: &mut Bus,
@@ -951,6 +1048,8 @@ impl CpuState {
         self.set_zn(self.a);
         base
     }
+    // OR the addressed operand into A and update Z/N, preserving carry/overflow.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_ora_page(
         &mut self,
         bus: &mut Bus,
@@ -965,6 +1064,8 @@ impl CpuState {
         self.set_zn(self.a);
         base + p as u8
     }
+    // AND the addressed operand into A and update Z/N, preserving carry/overflow.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_and(
         &mut self,
         bus: &mut Bus,
@@ -979,6 +1080,8 @@ impl CpuState {
         self.set_zn(self.a);
         base
     }
+    // AND the addressed operand into A and update Z/N, preserving carry/overflow.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_and_page(
         &mut self,
         bus: &mut Bus,
@@ -993,6 +1096,8 @@ impl CpuState {
         self.set_zn(self.a);
         base + p as u8
     }
+    // XOR the addressed operand into A and update Z/N, preserving carry/overflow.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_eor(
         &mut self,
         bus: &mut Bus,
@@ -1007,6 +1112,8 @@ impl CpuState {
         self.set_zn(self.a);
         base
     }
+    // XOR the addressed operand into A and update Z/N, preserving carry/overflow.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_eor_page(
         &mut self,
         bus: &mut Bus,
@@ -1021,6 +1128,8 @@ impl CpuState {
         self.set_zn(self.a);
         base + p as u8
     }
+    // Read the addressed operand and perform binary add-with-carry on A.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_adc(
         &mut self,
         bus: &mut Bus,
@@ -1034,6 +1143,8 @@ impl CpuState {
         self.adc(v);
         base
     }
+    // Read the addressed operand and perform binary add-with-carry on A.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_adc_page(
         &mut self,
         bus: &mut Bus,
@@ -1047,6 +1158,8 @@ impl CpuState {
         self.adc(v);
         base + p as u8
     }
+    // Read the addressed operand and perform binary subtract-with-borrow on A.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_sbc(
         &mut self,
         bus: &mut Bus,
@@ -1060,6 +1173,8 @@ impl CpuState {
         self.sbc(v);
         base
     }
+    // Read the addressed operand and perform binary subtract-with-borrow on A.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_sbc_page(
         &mut self,
         bus: &mut Bus,
@@ -1074,6 +1189,8 @@ impl CpuState {
         base + p as u8
     }
 
+    // Compare A with the addressed operand, updating C/Z/N without changing A.
+    // Return the caller-supplied base cycles without a page-crossing penalty.
     fn op_cmp(
         &mut self,
         bus: &mut Bus,
@@ -1087,6 +1204,8 @@ impl CpuState {
         self.compare(self.a, v);
         base
     }
+    // Compare A with the addressed operand, updating C/Z/N without changing A.
+    // Add one cycle to the supplied base when the operand address crosses a page.
     fn op_cmp_page(
         &mut self,
         bus: &mut Bus,
@@ -1100,6 +1219,8 @@ impl CpuState {
         self.compare(self.a, v);
         base + p as u8
     }
+    // Compare X with the addressed operand, updating C/Z/N and preserving
+    // the register. Return the supplied fixed cycle count.
     fn op_cpx(
         &mut self,
         bus: &mut Bus,
@@ -1113,6 +1234,8 @@ impl CpuState {
         self.compare(self.x, v);
         base
     }
+    // Compare Y with the addressed operand, updating C/Z/N and preserving
+    // the register. Return the supplied fixed cycle count.
     fn op_cpy(
         &mut self,
         bus: &mut Bus,
@@ -1127,6 +1250,9 @@ impl CpuState {
         base
     }
 
+    // Shift the addressed byte left, updating carry and Z/N.
+    // This model performs one read and one final write at the current timestamp;
+    // it does not emit an intermediate write of the original value. Return base cycles.
     fn op_asl_mem(
         &mut self,
         bus: &mut Bus,
@@ -1142,6 +1268,9 @@ impl CpuState {
         bus.write(r.addr, n, frame, self.cycles, cfg, sink);
         base
     }
+    // Shift the addressed byte right with zero fill, updating carry and Z/N.
+    // This model performs one read and one final write at the current timestamp;
+    // it does not emit an intermediate write of the original value. Return base cycles.
     fn op_lsr_mem(
         &mut self,
         bus: &mut Bus,
@@ -1157,6 +1286,9 @@ impl CpuState {
         bus.write(r.addr, n, frame, self.cycles, cfg, sink);
         base
     }
+    // Rotate the addressed byte left through carry, updating carry and Z/N.
+    // This model performs one read and one final write at the current timestamp;
+    // it does not emit an intermediate write of the original value. Return base cycles.
     fn op_rol_mem(
         &mut self,
         bus: &mut Bus,
@@ -1172,6 +1304,9 @@ impl CpuState {
         bus.write(r.addr, n, frame, self.cycles, cfg, sink);
         base
     }
+    // Rotate the addressed byte right through carry, updating carry and Z/N.
+    // This model performs one read and one final write at the current timestamp;
+    // it does not emit an intermediate write of the original value. Return base cycles.
     fn op_ror_mem(
         &mut self,
         bus: &mut Bus,
@@ -1187,6 +1322,9 @@ impl CpuState {
         bus.write(r.addr, n, frame, self.cycles, cfg, sink);
         base
     }
+    // Decrement the addressed byte with wrapping and update Z/N.
+    // This model performs one read and one final write at the current timestamp;
+    // it does not emit an intermediate write of the original value. Return base cycles.
     fn op_dec_mem(
         &mut self,
         bus: &mut Bus,
@@ -1204,6 +1342,9 @@ impl CpuState {
         self.set_zn(n);
         base
     }
+    // Increment the addressed byte with wrapping and update Z/N.
+    // This model performs one read and one final write at the current timestamp;
+    // it does not emit an intermediate write of the original value. Return base cycles.
     fn op_inc_mem(
         &mut self,
         bus: &mut Bus,
@@ -1223,10 +1364,15 @@ impl CpuState {
     }
 }
 
+// Return the display-table entry for any opcode byte. A name in this table
+// does not imply that the execution match implements that opcode.
 pub fn opcode_mnemonic(op: u8) -> &'static str {
     OPCODE_NAMES[op as usize]
 }
 
+// Display names also encode operand placeholders used by disassembly:
+// # for immediate, d for zero page, a for absolute and uppercase A for
+// accumulator. Unofficial labels are descriptive and may remain unimplemented.
 const OPCODE_NAMES: [&str; 256] = [
     "BRK",
     "ORA (d,X)",

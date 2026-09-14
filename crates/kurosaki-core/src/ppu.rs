@@ -8,6 +8,8 @@ const DOTS_PER_SCANLINE: u16 = 341;
 const SCANLINES_PER_NTSC_FRAME: i16 = 262;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Observation record with an external frame label and cumulative rendering
+// counters; the name does not imply all fields were reset at a frame boundary.
 pub struct PpuFrameStats {
     pub frame: u64,
     pub rendered_scanlines: u32,
@@ -18,6 +20,9 @@ pub struct PpuFrameStats {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+// Serialized registers, scroll fields, local video storage and cumulative
+// observations. Public vectors and coordinates must retain their valid shapes
+// for indexed accesses; mapper pattern memory is stored elsewhere.
 pub struct PpuState {
     pub ctrl: u8,
     pub mask: u8,
@@ -61,6 +66,9 @@ pub struct PpuState {
 }
 
 impl Default for PpuState {
+    // Allocate zeroed palette, OAM, VRAM and indexed framebuffer storage; start
+    // at scanline/dot zero with four-screen mirroring and cleared counters.
+    // The bus later adopts the cartridge mapper's mirroring policy.
     fn default() -> Self {
         Self {
             ctrl: 0,
@@ -106,10 +114,12 @@ impl Default for PpuState {
 }
 
 impl PpuState {
+    // Replace the address-normalization policy without moving stored VRAM bytes.
     pub fn set_nametable_mirroring(&mut self, mirroring: NametableMirroring) {
         self.nametable_mirroring = mirroring;
     }
 
+    // Read a mirrored PPU register with no intra-instruction timing offset.
     pub fn read_register(
         &mut self,
         reg: u16,
@@ -121,6 +131,10 @@ impl PpuState {
         self.read_register_timed(reg, frame, cycle, 0, trace_cfg, sink)
     }
 
+    // Read status/OAM/data through reg & 7 and trace the canonical register.
+    // Status reads clear vblank and both write toggles; data reads increment v.
+    // PPUDATA reads are immediate local-VRAM reads here, with no delayed read
+    // buffer or mapper CHR callback.
     pub fn read_register_timed(
         &mut self,
         reg: u16,
@@ -168,10 +182,15 @@ impl PpuState {
         value
     }
 
+    // Predict crossing from scanline 240 into 241 within the supplied ticks.
+    // This helper assumes dot is within the normal 0..340 range.
     fn vblank_starts_within(&self, ppu_ticks: u16) -> bool {
         self.scanline == 240 && ppu_ticks >= DOTS_PER_SCANLINE - self.dot
     }
 
+    // Apply the canonical register write, update counters and shared scroll/
+    // address toggles, and report rendering-risk candidates. Return pattern-table
+    // writes to the bus for mapper routing; other data writes update local VRAM.
     pub fn write_register(
         &mut self,
         reg: u16,
@@ -190,6 +209,9 @@ impl PpuState {
         } else {
             current_rendering_enabled
         };
+        // For PPUMASK writes, classify risk using the resulting enable bits.
+        // This predicate uses visible scanlines and the vblank latch; the separate
+        // PPUDATA hazard predicate also covers pre-render line 261.
         let write_during_rendering =
             visible_scanline && self.status & 0x80 == 0 && resulting_rendering_enabled;
         // Reading PPUSTATUS clears bit 7, but does not end the physical VBlank
@@ -224,6 +246,8 @@ impl PpuState {
                 if write_during_rendering {
                     self.scroll_writes_while_rendering += 1;
                 }
+                // Scroll and address writes share addr_latch as their authoritative
+                // toggle; scroll_latch is maintained in parallel for exported state.
                 if !self.addr_latch {
                     self.fine_x = value & 0x07;
                     self.scroll_x = value;
@@ -263,6 +287,8 @@ impl PpuState {
                 if write_during_rendering {
                     self.data_writes_while_rendering += 1;
                 }
+                // Pass a CHR write out to the bus instead of updating local pattern
+                // bytes. The returned address uses the stored v value before incrementing.
                 if self.vram_addr < 0x2000 {
                     chr_write = Some((self.vram_addr, value));
                 } else {
@@ -291,6 +317,10 @@ impl PpuState {
         chr_write
     }
 
+    // Convert each CPU cycle to three PPU ticks and process scanline boundaries.
+    // Render a whole visible line when it ends, update scroll state, enter vblank
+    // at line 241 and hash the completed frame on line 262 wrap. This is a
+    // scanline model without odd-frame dot skipping or individual fetch timing.
     pub fn clock_cpu_cycles<F>(
         &mut self,
         cpu_cycles: u64,
@@ -304,6 +334,8 @@ impl PpuState {
         F: FnMut(u16, u64, u64, TraceConfig, &mut TraceSink) -> u8,
     {
         let mut nmi_requested = false;
+        // Retain partial-line dots between calls. Each line completed by this
+        // chunk uses the caller's frame/cycle label rather than a per-fetch clock.
         let mut ppu_ticks = cpu_cycles.saturating_mul(3);
         while ppu_ticks > 0 {
             let remaining_in_line = (DOTS_PER_SCANLINE - self.dot) as u64;
@@ -351,6 +383,9 @@ impl PpuState {
         nmi_requested
     }
 
+    // Set vblank unless a timed status read already consumed that transition,
+    // then count/trace the event. Return the control-register NMI request even
+    // when status setting was suppressed; the trace message remains a generic label.
     pub fn begin_vblank(
         &mut self,
         frame: u64,
@@ -374,11 +409,15 @@ impl PpuState {
         self.ctrl & 0x80 != 0
     }
 
+    // Clear only the vblank status bit and suppression flag. Sprite-hit and
+    // overflow bits are not cleared by this current end-of-frame helper.
     pub fn end_vblank(&mut self) {
         self.status &= !0x80;
         self.suppress_next_vblank_status = false;
     }
 
+    // Attach the caller's frame label to cumulative counters and the stored
+    // pixel hash. rendered_scanlines narrows to u32; these are not frame-local deltas.
     pub fn current_frame_stats(&self, frame: u64) -> PpuFrameStats {
         PpuFrameStats {
             frame,
@@ -390,6 +429,8 @@ impl PpuState {
         }
     }
 
+    // Advance fine Y, then coarse Y at its wrap. Coarse row 29 toggles the
+    // vertical nametable bit; row 31 wraps without toggling it.
     fn increment_render_y(&mut self) {
         if self.vram_addr & 0x7000 != 0x7000 {
             self.vram_addr += 0x1000;
@@ -409,14 +450,22 @@ impl PpuState {
         self.vram_addr = (self.vram_addr & !0x03E0) | (coarse_y << 5);
     }
 
+    // Copy coarse X and horizontal nametable selection from t into v while
+    // preserving the vertical fields.
     fn copy_render_x_from_temp(&mut self) {
         self.vram_addr = (self.vram_addr & !0x041F) | (self.temp_addr & 0x041F);
     }
 
+    // Copy fine/coarse Y and vertical nametable selection from t into v while
+    // preserving the horizontal fields.
     fn copy_render_y_from_temp(&mut self) {
         self.vram_addr = (self.vram_addr & !0x7BE0) | (self.temp_addr & 0x7BE0);
     }
 
+    // Fill one row with backdrop, then render background and selected sprites
+    // using the state available at this boundary. Pattern callbacks carry the
+    // same supplied timestamp for the line; register changes are not reconstructed
+    // per pixel. The caller supplies a visible y and correctly sized buffers.
     fn render_scanline<F>(
         &mut self,
         y: usize,
@@ -453,6 +502,8 @@ impl PpuState {
         };
         let sprite_height = if self.ctrl & 0x20 != 0 { 16 } else { 8 };
         let mut sprite_count = 0u8;
+        // Track nontransparent background pixels independently of the final
+        // color index for sprite priority and sprite-zero overlap checks.
         let mut bg_opaque = [false; NES_WIDTH];
 
         if sprites_enabled {
@@ -463,6 +514,8 @@ impl PpuState {
                 }
             }
 
+            // Count lines with more than eight candidates and latch overflow.
+            // This is a count-based approximation of sprite evaluation.
             if sprite_count > 8 {
                 self.status |= 0x20;
                 self.sprite_overflow_candidates += 1;
@@ -499,6 +552,8 @@ impl PpuState {
                 let nametable = nametable_y * 2 + nametable_x;
                 let nametable_base = 0x2000 + nametable * 0x400;
                 let nt_index = nametable_base + tile_y * 32 + tile_x;
+                // Fetch each newly encountered tile row once and reuse its bitplanes
+                // for adjacent pixels. Attribute selection still uses the current tile quadrant.
                 if nt_index != cached_nt_index {
                     let tile = self.read_vram(nt_index as u16);
                     let pattern_addr = bg_pattern_base + (tile as u16) * 16 + (fine_y as u16);
@@ -557,6 +612,10 @@ impl PpuState {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // Select the first eight intersecting OAM entries and draw them in reverse
+    // index order. Apply flips, left-edge clipping, transparency and background
+    // priority. Sprite-zero overlap is counted per matching pixel, not once per
+    // scanline or once per frame.
     fn render_sprites_on_scanline<F>(
         &mut self,
         y: usize,
@@ -625,12 +684,17 @@ impl PpuState {
                     continue;
                 }
 
+                // Latch sprite-zero hit before applying the sprite's behind-background
+                // flag, excluding x=255. Multiple overlapping pixels increment the counter.
                 if sprite_index == 0 && bg_opaque[x] && x != 255 {
                     self.status |= 0x40;
                     self.sprite0_hit_candidates += 1;
                 }
 
                 let behind_background = attr & 0x20 != 0;
+                // Skip this sprite pixel when the background is opaque. Because sprites
+                // are drawn directly in reverse order, this path does not undo a pixel
+                // already drawn by a higher-index sprite.
                 if behind_background && bg_opaque[x] {
                     continue;
                 }
@@ -640,6 +704,8 @@ impl PpuState {
         }
     }
 
+    // Select an attribute quadrant for the tile, combine its palette with the
+    // nonzero two-bit pattern value, and return a six-bit color index.
     fn bg_color_index(&self, nametable_base: usize, tile_x: usize, tile_y: usize, bits: u8) -> u8 {
         let attr_addr = nametable_base + 0x3C0 + (tile_y / 4) * 8 + (tile_x / 4);
         let attr = self.read_vram(attr_addr as u16);
@@ -648,11 +714,15 @@ impl PpuState {
         self.palette[palette * 4 + bits as usize] & 0x3F
     }
 
+    // Use the sprite's low two attribute bits and nonzero pattern bits to read
+    // its palette entry, masked to six bits.
     fn sprite_color_index(&self, attr: u8, bits: u8) -> u8 {
         let palette = (attr & 0x03) as usize;
         self.palette[0x10 + palette * 4 + bits as usize] & 0x3F
     }
 
+    // Normalize nametable/palette mirrors and read local storage. Pattern bytes
+    // in this local array are separate from mapper-owned CHR used by rendering.
     fn read_vram(&self, addr: u16) -> u8 {
         let index = self.normalize_vram_addr(addr) as usize;
         if (0x3F00..=0x3FFF).contains(&(addr & 0x3FFF)) {
@@ -662,6 +732,8 @@ impl PpuState {
         }
     }
 
+    // Normalize and update local nametable/palette storage. Palette bytes are
+    // retained as written; rendering masks them when selecting a color.
     fn write_vram(&mut self, addr: u16, value: u8) {
         let index = self.normalize_vram_addr(addr) as usize;
         if (0x3F00..=0x3FFF).contains(&(addr & 0x3FFF)) {
@@ -672,6 +744,9 @@ impl PpuState {
         }
     }
 
+    // Mask to 14 bits, mirror $3000-$3EFF, map four logical nametables through
+    // the selected policy, and fold palette/universal-color aliases. Pattern
+    // addresses remain unchanged.
     fn normalize_vram_addr(&self, addr: u16) -> u16 {
         let mut a = addr & 0x3FFF;
         if (0x3000..=0x3EFF).contains(&a) {
@@ -699,11 +774,15 @@ impl PpuState {
         a
     }
 
+    // Advance CPU PPUDATA access by one or 32 from PPUCTRL, wrapping to 14 bits.
+    // This differs from rendering's fine/coarse scroll increment.
     fn increment_vram_addr(&mut self) {
         let inc = if self.ctrl & 0x04 != 0 { 32 } else { 1 };
         self.vram_addr = self.vram_addr.wrapping_add(inc) & 0x3FFF;
     }
 
+    // Compute wrapping 64-bit FNV-1a over indexed framebuffer bytes. This
+    // hashes palette indices, not RGB conversion or current color-emphasis bits.
     fn compute_pixel_hash(&self) -> u64 {
         let mut hash = 0xcbf29ce484222325u64;
         for b in &self.frame_buffer {
@@ -714,11 +793,16 @@ impl PpuState {
     }
 }
 
+// Combine the two pattern planes at pixel x, with bit seven on the left.
+// Internal callers must provide x in 0..8.
 fn pattern_pixel_bits(lo: u8, hi: u8, x: usize) -> u8 {
     let shift = 7 - x;
     ((lo >> shift) & 1) | (((hi >> shift) & 1) << 1)
 }
 
+// For 8x16 sprites, use the tile low bit as table selection and the even
+// tile pair plus row half. For 8x8 sprites, use PPUCTRL's supplied table base.
+// Vertical flipping is applied to row by the caller.
 fn sprite_pattern_addr(pattern_base: u16, sprite_height: i16, tile: u8, row: usize) -> u16 {
     if sprite_height == 16 {
         let table_base = ((tile & 0x01) as u16) * 0x1000;
@@ -736,6 +820,9 @@ mod tests {
     use crate::trace::{TraceConfig, TraceSink};
 
     #[test]
+    // Model a cleared vblank latch at physical line 246 and require no warning,
+    // then move to visible line 100 and require a write-risk event. This test
+    // sets the post-read state directly instead of invoking a status read.
     fn reading_status_does_not_make_physical_vblank_vram_writes_unsafe() {
         let mut ppu = PpuState { mask: 0x1E, scanline: 246, status: 0, ..PpuState::default() };
         let mut sink=TraceSink::default();
@@ -747,6 +834,8 @@ mod tests {
     }
 
     #[test]
+    // Apply the four mixed $2006/$2005 writes and check internal v, fine X and
+    // cleared shared write toggles.
     fn scroll_and_address_share_the_write_toggle_for_raster_split() {
         let mut ppu=PpuState::default();let mut sink=TraceSink::default();
         // $2006 high, $2005 Y, $2005 X, $2006 low is the raster-scroll
@@ -760,6 +849,8 @@ mod tests {
     }
 
     #[test]
+    // Render nine synthetic sprites; verify first-entry priority for an overlap,
+    // exclusion of the ninth sprite and the overflow candidate bit.
     fn sprite_evaluation_renders_only_first_eight_and_honors_oam_order() {
         let mut ppu = PpuState { mask: 0x14, ..PpuState::default() };
         ppu.oam.fill(0xF8);
@@ -787,6 +878,9 @@ mod tests {
     }
 
     #[test]
+    // Render a row without visible sprites and record pattern callbacks. Check
+    // background-table access and sixteen sprite-table byte fetches; this does
+    // not execute or validate a mapper IRQ circuit.
     fn empty_scanlines_still_fetch_sprite_table_for_mapper_irq() {
         let mut ppu = PpuState { mask: 0x1E, ctrl: 0x08, ..PpuState::default() };
         ppu.oam.fill(0xF8);
@@ -808,6 +902,8 @@ mod tests {
     }
 
     #[test]
+    // Cross the modeled boundary with a three-cycle read offset, then check
+    // returned status, suppression consumption and the continuing NMI request.
     fn timed_status_read_observes_vblank_start_on_its_data_cycle() {
         let mut ppu = PpuState {
             ctrl: 0x80,
@@ -828,6 +924,8 @@ mod tests {
     }
 
     #[test]
+    // Use a shorter offset at the same scanline/dot and require no predicted
+    // vblank flag or suppression request.
     fn timed_status_read_before_boundary_does_not_report_vblank() {
         let mut ppu = PpuState {
             status: 0x20,
@@ -844,6 +942,8 @@ mod tests {
     }
 
     #[test]
+    // Write PPUDATA below $2000 and check the returned mapper write tuple,
+    // unchanged local pattern storage and incremented address.
     fn pattern_table_data_write_is_returned_for_mapper_routing() {
         let mut ppu = PpuState {
             vram_addr: 0x0123,
@@ -859,6 +959,8 @@ mod tests {
     }
 
     #[test]
+    // Render one disabled row over stale pixels, requiring the current backdrop
+    // across that row while leaving an adjacent row unchanged.
     fn disabled_rendering_outputs_backdrop_instead_of_a_stale_scanline() {
         let mut ppu = PpuState::default();
         ppu.palette[0] = 0x22;
@@ -878,6 +980,8 @@ mod tests {
     }
 
     #[test]
+    // Check scroll/control field updates and the changed first pixel after
+    // explicitly copying the temporary address into the render address.
     fn scroll_register_updates_render_coordinates_and_internal_temp_address() {
         let mut ppu = PpuState {
             mask: 0x0A,
@@ -916,6 +1020,7 @@ mod tests {
     }
 
     #[test]
+    // Check fine-Y/coarse-row-29 wrap and horizontal/vertical bitfield copies.
     fn loopy_scroll_copies_temp_axes_and_wraps_vertical_position() {
         let mut ppu = PpuState {
             vram_addr: 0x7000 | (29 << 5),
@@ -935,6 +1040,8 @@ mod tests {
     }
 
     #[test]
+    // Check representative vertical, horizontal, single-screen and universal
+    // palette aliases using address normalization without rendering.
     fn nametable_and_palette_addresses_follow_nes_mirroring() {
         let mut ppu = PpuState::default();
 
