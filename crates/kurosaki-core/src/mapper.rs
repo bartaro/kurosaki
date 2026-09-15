@@ -3470,7 +3470,9 @@ impl FdsAudioState {
     // a bit-exact hardware modulation calculation.
     fn effective_frequency_hz(&mut self, sample_rate: u32) -> f64 {
         self.clock_modulation(sample_rate);
-        let base = self.freq as f64 * CPU_HZ_NTSC / 65_536.0;
+        // The 16-bit fractional clock advances one of 64 waveform entries.
+        // sample() stores phase in complete periods, so include that factor.
+        let base = self.freq as f64 * CPU_HZ_NTSC / (65_536.0 * 64.0);
         let depth_units = self.mod_env.output() as f64;
         if self.mod_halt || self.mod_freq == 0 || depth_units <= 0.0 {
             return base;
@@ -4160,6 +4162,33 @@ mod fds_audio_tests {
         fds.write(0x4082, 0x80);
         fds.write(0x4083, 0x01); // unhalt wave + volume envelope, high frequency bits = 1
         fds
+    }
+
+    #[test]
+    // Count complete waveform periods, not individual wavetable advances.
+    // Check two audible pitches and the maximum unmodulated pitch at two
+    // output rates, allowing one crossing at the observation boundary.
+    fn fds_unmodulated_pitch_includes_all_64_wave_steps() {
+        for sample_rate in [44_100, 48_000] {
+            for frequency in [1031u16, 1545, 4095] {
+                let mut fds = make_audible_fds();
+                fds.write(0x4080, 0xA0);
+                fds.write(0x4087, 0x80);
+                fds.write(0x4082, frequency as u8);
+                fds.write(0x4083, (frequency >> 8) as u8);
+                let mut previous = 0;
+                let mut crossings = 0;
+                for _ in 0..sample_rate {
+                    let current = fds.sample(sample_rate);
+                    if previous <= 0 && current > 0 {
+                        crossings += 1;
+                    }
+                    previous = current;
+                }
+                let expected = frequency as f64 * CPU_HZ_NTSC / 4_194_304.0;
+                assert!((crossings as f64 - expected).abs() <= 1.0);
+            }
+        }
     }
 
     #[test]

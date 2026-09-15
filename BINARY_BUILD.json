@@ -1,10 +1,10 @@
 {
-  "built_on": "2026-09-14",
+  "built_on": "2026-09-16",
   "licensor": "DAISUKE OBA",
   "configuration": "Release",
   "build_command": ".\\scripts\\build.ps1 -Offline",
   "build_exit_code": 0,
-  "source_revision_before_packaging": "fd2c1511e2fae89630b9083ae6fed076ae4eadb8",
+  "source_revision_before_packaging": "4cb29aade3ab5cd320b14527d94a5d60cd79ed91",
   "source_state": "Reviewed publication working tree; source_inputs hashes identify the recorded files.",
   "source_inventory_scope": "Public Rust workspace and build scripts; the executable contains the CLI dependency closure.",
   "source_inputs": [
@@ -50,7 +50,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/bus.rs",
-      "sha256": "d1bcc364f9f55b5a56867f32d3aaae79bf55b2bfa4dca607c20312421eb0c638"
+      "sha256": "76a7d1e9a187eae09670b16770df4223971931f7df61fe239f3ed5a57ef93f27"
     },
     {
       "path": "crates/kurosaki-core/src/cart.rs",
@@ -102,7 +102,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/mapper.rs",
-      "sha256": "ec07578ac407db40e27f81c13e15eb8b815605706ffec416e5bde0a124f6eaa2"
+      "sha256": "be4339cccaea84e98cbb96cec858c7e0ef118ea6e62daeb92ad4920ff6794c9a"
     },
     {
       "path": "crates/kurosaki-core/src/mapper_db.rs",
@@ -110,7 +110,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/mapper_scaffolds.rs",
-      "sha256": "9717bf2def4a32edb46d484a6b416e0acd69db9c22966c7891a495b93701a6ef"
+      "sha256": "02962f2781b2488e4075fdd212e4cb4798607ca90fbec8920eadf9bc98f6fdc9"
     },
     {
       "path": "crates/kurosaki-core/src/ppu.rs",
@@ -167,8 +167,8 @@
   ],
   "binary": {
     "path": "kurosaki.exe",
-    "bytes": 2511360,
-    "sha256": "be071c4df9619da328eb4a73a4c1e6855bb925a876139045b6e04759a542b717",
+    "bytes": 2510848,
+    "sha256": "439b78cb2e18d5be2b785aa37373203219b66e2cde08b165d931f6836fa7cc3c",
     "imported_system_dlls": [
       "api-ms-win-core-synch-l1-2-0.dll",
       "kernel32.dll",
@@ -177,15 +177,24 @@
   },
   "checks": [
     {
-      "check": "--help captured",
-      "exit_code": 0
+      "check": "kurosaki-core library unit tests, including CHR decoding and FDS waveform-period measurements",
+      "cases": 50,
+      "result": "all passed"
     },
     {
-      "check": "Current manual sample execution",
-      "samples": 18,
-      "frames_per_run": 120,
-      "result": "all passed",
-      "evidence": "https://bartaro.github.io/kitaq-docs/verification/current/samples.json"
+      "check": "FC sound lessons: APU, DMC, VRC6, VRC7, FDS, MIDI; RAM, screen pixels and recorded PCM/port timing",
+      "cases": 6,
+      "result": "all passed"
+    },
+    {
+      "check": "Compiler/emulator regression scripts covering memory, bits, RNG, OAM, interrupts, PPU, callbacks, physics and library lessons",
+      "scripts": 16,
+      "result": "all passed"
+    },
+    {
+      "check": "Interrupt and PPU register state cases",
+      "cases": 52,
+      "result": "all passed"
     }
   ],
   "scope": "Windows CLI release. Compilation and bounded emulator execution are separate checks; no blanket physical-hardware or peripheral compatibility claim.",

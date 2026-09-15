@@ -1421,6 +1421,18 @@ impl Mapper for VrcFamilyMapper {
                     self.chr_regs[if addr & 0x0010 != 0 { 7 } else { 6 }] = value;
                 }
                 0xE000..=0xFFFF if self.is_vrc7() => self.write_vrc_irq(addr, value),
+                // VRC6's eight CHR selectors occupy $D000-$D003/$E000-$E003.
+                // Decode low address lines within each mirrored 4 KiB region;
+                // mapper 26 wires A0 and A1 in the opposite order to mapper 24.
+                0xD000..=0xEFFF if self.is_vrc6() => {
+                    let select = if self.mapper == 26 {
+                        ((addr & 1) << 1) | ((addr & 2) >> 1)
+                    } else {
+                        addr & 3
+                    };
+                    let slot = (((addr - 0xD000) >> 12) * 4 + select) as usize;
+                    self.chr_regs[slot] = value;
+                }
                 0xB000..=0xEFFF => {
                     if self.is_vrc4_like() || matches!(self.mapper, 22 | 23 | 24 | 26) {
                         if matches!(self.mapper, 21 | 22 | 23 | 25) {
@@ -3115,6 +3127,38 @@ mod vrc7_audio_tests {
         assert_eq!(mapper.read_chr(0x1400), 5);
         assert_eq!(mapper.read_chr(0x1800), 6);
         assert_eq!(mapper.read_chr(0x1C00), 7);
+    }
+
+    #[test]
+    // Each VRC6 selector controls one 1 KiB pattern-memory slot. Mapper 26
+    // exchanges CPU A0/A1; mirrored selector addresses must behave identically.
+    fn vrc6_chr_registers_select_independent_1k_windows() {
+        for mapper_id in [24, 26] {
+            let mut mapper = VrcFamilyMapper::new(
+                mapper_id,
+                vec![0; 32 * 1024],
+                marker_chr_1k(16),
+                Mirroring::Horizontal,
+            );
+            let mut sink = TraceSink::default();
+            for mirror in [0, 0x0FFC] {
+                for slot in 0..8u16 {
+                    let select = if mapper_id == 26 {
+                        ((slot & 1) << 1) | ((slot & 2) >> 1)
+                    } else {
+                        slot & 3
+                    };
+                    let addr = 0xD000 + (slot / 4) * 0x1000 + mirror + select;
+                    let bank = (15 - slot) as u8;
+                    mapper.write_prg(addr, bank, 0, 0, TraceConfig::none(), &mut sink);
+                    assert_eq!(mapper.read_chr(slot * 0x400), bank);
+                }
+                assert_eq!(
+                    mapper.debug_state().chr_bank_window,
+                    vec![15, 14, 13, 12, 11, 10, 9, 8]
+                );
+            }
+        }
     }
 
     #[test]
