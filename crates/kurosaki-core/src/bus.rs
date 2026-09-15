@@ -489,7 +489,10 @@ impl Bus {
                 TraceConfig::none(),
                 sink,
             );
-            self.ppu.oam[i as usize] = value;
+            // DMA performs OAMDATA writes from the current destination cursor.
+            // Advancing the byte address naturally wraps after the 256th write.
+            self.ppu.oam[self.ppu.oam_addr as usize] = value;
+            self.ppu.oam_addr = self.ppu.oam_addr.wrapping_add(1);
         }
         self.dma_stall_cycles += 513;
         self.clock_devices(513, frame, cycle, cfg, sink);
