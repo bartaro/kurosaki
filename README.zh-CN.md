@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **简体中文**
 
-**[打开KUROSAKI简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html)**
+**打开KUROSAKI简体中文手册**
 
 用于观察NES/Famicom/FDS程序运行状态的模拟器，提供命令行工具、执行跟踪和Python接口。
 
@@ -31,7 +31,7 @@
 
 ## 手册与许可证
 
-- [简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html)
+- 简体中文手册
 - [英文手册](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) / [日文手册](https://bartaro.github.io/kitaq-docs/kurosaki.html)
 - [供离线阅读的手册源码](https://github.com/bartaro/kitaq-docs)
 - [许可证](LICENSE) / [日文参考译文](LICENSE.ja)

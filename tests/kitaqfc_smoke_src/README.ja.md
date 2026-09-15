@@ -1,6 +1,6 @@
 # KITAQFC NROMの基本動作確認用ソース
 
-[English](README.md) | [日本語](README.ja.md) | [Français](README.fr.md) | [Deutsch](README.de.md)
+[English](README.md) | [日本語](README.ja.md)
 
 [日本語のKUROSAKI説明書](https://bartaro.github.io/kitaq-docs/kurosaki.html) · [日本語のKITAQFC説明書](https://bartaro.github.io/kitaq-docs/kitaqfc.html)
 

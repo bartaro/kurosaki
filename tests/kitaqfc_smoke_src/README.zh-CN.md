@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md) | **简体中文**
 
-[KUROSAKI简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html) · [KITAQFC简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kitaqfc.html)
+KUROSAKI简体中文手册 · KITAQFC简体中文手册
 
 这份源码计划在后续使用KITAQFC Phase26开发树构建，再将编译器生成的ROM复制到 `crates/kurosaki-core/tests/fixtures/`，作为测试基准。这并不表示该源码已经完成构建验证。
 

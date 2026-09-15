@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **한국어**
 
-**[KUROSAKI 한국어 설명서 열기](https://bartaro.github.io/kitaq-docs/ko/kurosaki.html)**
+**KUROSAKI 한국어 설명서 열기**
 
 NES/Famicom/FDS의 실행 상태를 관찰하는 에뮬레이터입니다. 명령줄 도구, 트레이스, Python 인터페이스를 제공합니다.
 
@@ -31,7 +31,7 @@ NES/Famicom/FDS의 실행 상태를 관찰하는 에뮬레이터입니다. 명�
 
 ## 설명서와 라이선스
 
-- [한국어 설명서](https://bartaro.github.io/kitaq-docs/ko/kurosaki.html)
+- 한국어 설명서
 - [영어 설명서](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) / [일본어 설명서](https://bartaro.github.io/kitaq-docs/kurosaki.html)
 - [오프라인 열람용 설명서 소스](https://github.com/bartaro/kitaq-docs)
 - [라이선스](LICENSE) / [일본어 참고 번역](LICENSE.ja)

@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **Português (Brasil)**
 
-**[Abrir o manual de KUROSAKI em português](https://bartaro.github.io/kitaq-docs/pt/kurosaki.html)**
+**Abrir o manual de KUROSAKI em português**
 
 Emulador de observação NES/Famicom/FDS com linha de comando, rastreamento e interface Python.
 
@@ -31,7 +31,7 @@ Para recompilar, use uma versão estável atual do Rust. No Windows, instale o V
 
 ## Manuais e licenças
 
-- [Manual em português](https://bartaro.github.io/kitaq-docs/pt/kurosaki.html)
+- Manual em português
 - [Manual em inglês](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) / [Manual em japonês](https://bartaro.github.io/kitaq-docs/kurosaki.html)
 - [Fontes do manual para leitura offline](https://github.com/bartaro/kitaq-docs)
 - [Licença](LICENSE) / [Tradução de referência em japonês](LICENSE.ja)

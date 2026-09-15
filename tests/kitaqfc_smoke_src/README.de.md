@@ -2,7 +2,7 @@
 
 [English](README.md) | **Deutsch**
 
-**[KUROSAKI-Handbuch](https://bartaro.github.io/kitaq-docs/de/kurosaki.html)** · **[KITAQFC-Handbuch](https://bartaro.github.io/kitaq-docs/de/kitaqfc.html)**
+**KUROSAKI-Handbuch** · **KITAQFC-Handbuch**
 
 Dieser Quellcode ist dafür vorgesehen, später mit dem KITAQFC-Quellenstand Phase26 kompiliert und anschließend als vom Compiler erzeugte Referenz-ROM nach `crates/kurosaki-core/tests/fixtures/` kopiert zu werden.
 

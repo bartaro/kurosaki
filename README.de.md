@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **Deutsch**
 
-**[Deutsches Handbuch zu KUROSAKI öffnen](https://bartaro.github.io/kitaq-docs/de/kurosaki.html)**
+**Deutsches Handbuch zu KUROSAKI öffnen**
 
 NES-/Famicom-/FDS-Emulator zur Untersuchung von Programmläufen, mit Kommandozeile, Ablaufprotokollen und Python-Schnittstelle.
 
@@ -31,7 +31,7 @@ Verwenden Sie eine aktuelle stabile Rust-Toolchain. Installieren Sie unter Windo
 
 ## Handbücher und Lizenzen
 
-- [Deutsches Handbuch](https://bartaro.github.io/kitaq-docs/de/kurosaki.html)
+- Deutsches Handbuch
 - [Englisches Handbuch](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) / [Japanisches Handbuch](https://bartaro.github.io/kitaq-docs/kurosaki.html)
 - [Handbuchquellen zum Offline-Lesen](https://github.com/bartaro/kitaq-docs)
 - [Lizenz](LICENSE) / [Japanische Übersetzung zur Orientierung](LICENSE.ja)

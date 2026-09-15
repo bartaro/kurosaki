@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md) | **Español**
 
-[Manual de KUROSAKI en español](https://bartaro.github.io/kitaq-docs/es/kurosaki.html) · [Manual de KITAQFC en español](https://bartaro.github.io/kitaq-docs/es/kitaqfc.html)
+Manual de KUROSAKI en español · Manual de KITAQFC en español
 
 Está previsto compilar este código con el árbol de desarrollo Phase26 de KITAQFC y copiar la ROM resultante a `crates/kurosaki-core/tests/fixtures/` como referencia de prueba. Esto no significa que ya se haya verificado su compilación.
 

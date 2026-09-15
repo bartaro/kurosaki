@@ -2,7 +2,7 @@
 
 [English](README.md) | **Français**
 
-**[Manuel KUROSAKI](https://bartaro.github.io/kitaq-docs/fr/kurosaki.html)** · **[Manuel KITAQFC](https://bartaro.github.io/kitaq-docs/fr/kitaqfc.html)**
+**Manuel KUROSAKI** · **Manuel KITAQFC**
 
 Ce source est destiné à être compilé ultérieurement avec l'arborescence KITAQFC Phase26, puis copié dans `crates/kurosaki-core/tests/fixtures/` comme ROM de référence produite par le compilateur.
 

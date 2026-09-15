@@ -2,7 +2,7 @@
 
 [English](README.md) | [日本語](README.ja.md) | **한국어**
 
-[KUROSAKI 한국어 설명서](https://bartaro.github.io/kitaq-docs/ko/kurosaki.html) · [KITAQFC 한국어 설명서](https://bartaro.github.io/kitaq-docs/ko/kitaqfc.html)
+KUROSAKI 한국어 설명서 · KITAQFC 한국어 설명서
 
 이 소스는 향후 KITAQFC Phase26 개발 트리에서 빌드한 뒤, 컴파일러로 생성한 기준 ROM으로 `crates/kurosaki-core/tests/fixtures/`에 복사하기 위해 준비했습니다. 해당 빌드가 이미 완료되었다는 뜻은 아닙니다.
 

@@ -2,7 +2,7 @@
 
 [English](README.md#english) | [日本語](README.md#japanese) | **繁體中文**
 
-**[開啟 KUROSAKI 繁體中文手冊](https://bartaro.github.io/kitaq-docs/zh-TW/kurosaki.html)**
+**開啟 KUROSAKI 繁體中文手冊**
 
 NES／Famicom／FDS 模擬器，可透過命令列工具、執行追蹤與 Python 介面觀察程式的運作。
 
@@ -31,7 +31,7 @@ NES／Famicom／FDS 模擬器，可透過命令列工具、執行追蹤與 Pytho
 
 ## 手冊與授權
 
-- [繁體中文手冊](https://bartaro.github.io/kitaq-docs/zh-TW/kurosaki.html)
+- 繁體中文手冊
 - [英文手冊](https://bartaro.github.io/kitaq-docs/en/kurosaki.html)／[日文手冊](https://bartaro.github.io/kitaq-docs/kurosaki.html)
 - [可供離線閱讀的手冊原始檔](https://github.com/bartaro/kitaq-docs)
 - [授權條款](LICENSE)／[日文參考譯文](LICENSE.ja)

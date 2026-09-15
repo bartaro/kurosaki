@@ -5,17 +5,10 @@
 | --- | --- |
 | English | [KUROSAKI](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) |
 | 日本語 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/kurosaki.html) |
-| 한국어 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/ko/kurosaki.html) |
-| 简体中文 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html) |
-| 繁體中文 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/zh-TW/kurosaki.html) |
-| Español | [KUROSAKI](https://bartaro.github.io/kitaq-docs/es/kurosaki.html) |
-| Português (Brasil) | [KUROSAKI](https://bartaro.github.io/kitaq-docs/pt/kurosaki.html) |
-| Français | [KUROSAKI](https://bartaro.github.io/kitaq-docs/fr/kurosaki.html) |
-| Deutsch | [KUROSAKI](https://bartaro.github.io/kitaq-docs/de/kurosaki.html) |
 <!-- manual-language-links:end -->
 
 
-[English](#english) | [日本語](#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [Français](README.fr.md) | [Deutsch](README.de.md)
+[English](#english) | [日本語](#japanese)
 
 <a name="english"></a>
 
