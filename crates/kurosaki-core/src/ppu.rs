@@ -31,6 +31,12 @@ pub struct PpuState {
     pub scroll_latch: bool,
     pub addr_latch: bool,
     pub vram_addr: u16,
+    // PPUDATA returns this previous fetch for non-palette addresses.
+    #[serde(default)]
+    pub data_read_buffer: u8,
+    // The PPU I/O latch supplies open-bus bits, including palette read bits 6/7.
+    #[serde(default)]
+    pub io_latch: u8,
     pub temp_addr: u16,
     pub fine_x: u8,
     pub scroll_x: u8,
@@ -78,6 +84,8 @@ impl Default for PpuState {
             scroll_latch: false,
             addr_latch: false,
             vram_addr: 0,
+            data_read_buffer: 0,
+            io_latch: 0,
             temp_addr: 0,
             fine_x: 0,
             scroll_x: 0,
@@ -161,16 +169,29 @@ impl PpuState {
                 self.status &= !0x80;
                 self.scroll_latch = false;
                 self.addr_latch = false;
-                v
+                (v & 0xE0) | (self.io_latch & 0x1F)
             }
             4 => self.oam[self.oam_addr as usize],
             7 => {
-                let value = self.read_vram(self.vram_addr);
+                let address = self.vram_addr & 0x3FFF;
+                let value = if address >= 0x3F00 {
+                    // Palette reads bypass the delay but also fetch the mirrored
+                    // nametable underneath the palette into the ordinary buffer.
+                    let mask = if self.mask & 1 != 0 { 0x30 } else { 0x3F };
+                    let palette = (self.read_vram(address) & mask) | (self.io_latch & 0xC0);
+                    self.data_read_buffer = self.read_vram(address - 0x1000);
+                    palette
+                } else {
+                    let buffered = self.data_read_buffer;
+                    self.data_read_buffer = self.read_vram(address);
+                    buffered
+                };
                 self.increment_vram_addr();
                 value
             }
-            _ => 0,
+            _ => self.io_latch,
         };
+        self.io_latch = value;
         if trace_cfg.ppu {
             let mut event = TraceEvent::new("ppu.reg_read", frame, cycle);
             event.addr = Some(0x2000 | (reg & 7));
@@ -201,6 +222,7 @@ impl PpuState {
         sink: &mut TraceSink,
     ) -> Option<(u16, u8)> {
         let mut chr_write = None;
+        self.io_latch = value;
         let canonical = 0x2000 | (reg & 7);
         let visible_scanline = (0..240).contains(&self.scanline);
         let current_rendering_enabled = self.mask & 0x18 != 0;
@@ -818,6 +840,56 @@ mod tests {
     use super::PpuState;
     use crate::mapper::NametableMirroring;
     use crate::trace::{TraceConfig, TraceSink};
+
+    #[test]
+    fn ppudata_delays_nametable_reads_and_preserves_buffer_on_writes() {
+        let mut ppu = PpuState::default();
+        let mut sink = TraceSink::default();
+        ppu.vram[0x2000] = 7;
+        ppu.vram[0x2001] = 9;
+        ppu.vram_addr = 0x2000;
+        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0);
+        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 7);
+        ppu.write_register(0x2007, 3, 0, 0, TraceConfig::none(), &mut sink);
+        assert_eq!(ppu.data_read_buffer, 9);
+        ppu.vram_addr = 0x2000;
+        ppu.ctrl = 4;
+        assert_eq!(ppu.read_register(0x3FFF, 0, 0, TraceConfig::none(), &mut sink), 9);
+        assert_eq!(ppu.vram_addr, 0x2020);
+        assert_eq!(ppu.data_read_buffer, 7);
+    }
+
+    #[test]
+    fn ppudata_palette_bypasses_delay_and_refills_nametable_shadow() {
+        let mut ppu = PpuState::default();
+        let mut sink = TraceSink::default();
+        ppu.palette[0] = 0x2A;
+        ppu.vram[0x2F10] = 0x57;
+        ppu.vram_addr = 0x3F10;
+        ppu.io_latch = 0xC0;
+        ppu.data_read_buffer = 0x13;
+        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0xEA);
+        assert_eq!(ppu.data_read_buffer, 0x57);
+        ppu.vram_addr = 0x2000;
+        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0x57);
+        ppu.vram_addr = 0x3F00;
+        ppu.io_latch = 0;
+        ppu.mask = 1;
+        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0x20);
+    }
+
+    #[test]
+    fn ppudata_buffer_survives_snapshot_round_trip() {
+        let mut ppu = PpuState::default();
+        let mut sink = TraceSink::default();
+        ppu.data_read_buffer = 0x71;
+        ppu.io_latch = 0xE2;
+        ppu.vram_addr = 0x2000;
+        let serialized = serde_json::to_string(&ppu).unwrap();
+        let mut restored: PpuState = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.io_latch, 0xE2);
+        assert_eq!(restored.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0x71);
+    }
 
     #[test]
     // Model a cleared vblank latch at physical line 246 and require no warning,

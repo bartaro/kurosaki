@@ -117,14 +117,23 @@ impl Bus {
             0x2000..=0x3FFF => {
                 self.ppu
                     .set_nametable_mirroring(self.mapper.nametable_mirroring());
-                self.ppu.read_register_timed(
+                let pattern_addr = self.ppu.vram_addr & 0x3FFF;
+                let pattern_read = addr & 7 == 7 && pattern_addr < 0x2000;
+                let value = self.ppu.read_register_timed(
                     addr,
                     frame,
                     effective_cycle,
                     cpu_read_offset,
                     cfg,
                     sink,
-                )
+                );
+                if pattern_read {
+                    // The CPU received the previous buffer. Refill it from the
+                    // currently selected mapper CHR bank, not PPU local storage.
+                    self.mapper.notify_ppu_addr(pattern_addr, frame, effective_cycle, cfg, sink);
+                    self.ppu.data_read_buffer = self.mapper.read_chr(pattern_addr);
+                }
+                value
             }
             0x4016 | 0x4017 => self.read_joypad(addr, frame, effective_cycle, cfg, sink),
             0x4000..=0x4017 => {

@@ -1,10 +1,10 @@
 {
-  "built_on": "2026-09-16",
+  "built_on": "2026-09-22",
   "licensor": "DAISUKE OBA",
   "configuration": "Release",
   "build_command": ".\\scripts\\build.ps1 -Offline",
   "build_exit_code": 0,
-  "source_revision_before_packaging": "4cb29aade3ab5cd320b14527d94a5d60cd79ed91",
+  "source_revision_before_packaging": "ca3a911ef6f59d667ae840a6113e718092dc8d78",
   "source_state": "Reviewed publication working tree; source_inputs hashes identify the recorded files.",
   "source_inventory_scope": "Public Rust workspace and build scripts; the executable contains the CLI dependency closure.",
   "source_inputs": [
@@ -50,7 +50,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/bus.rs",
-      "sha256": "76a7d1e9a187eae09670b16770df4223971931f7df61fe239f3ed5a57ef93f27"
+      "sha256": "4178e8817a32d306d25f05957875c540d809240349d5a0a1e8ee50c70792b84d"
     },
     {
       "path": "crates/kurosaki-core/src/cart.rs",
@@ -114,7 +114,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/ppu.rs",
-      "sha256": "82ab3eb88ec60b87b147f4f27c1e5e46624c7a959ded0ecb73a3fe54962e7bdb"
+      "sha256": "9fd41325a790ee8029931b4266fd431560e171dada7c1e3067cd3ef2a9144445"
     },
     {
       "path": "crates/kurosaki-core/src/replay.rs",
@@ -167,9 +167,10 @@
   ],
   "binary": {
     "path": "kurosaki.exe",
-    "bytes": 2510848,
-    "sha256": "439b78cb2e18d5be2b785aa37373203219b66e2cde08b165d931f6836fa7cc3c",
+    "bytes": 2513920,
+    "sha256": "6472bf8e8476f3011c995f6822f59d138dbbb21af81f542c34e97dbaa54782c4",
     "imported_system_dlls": [
+      "KERNEL32.dll",
       "api-ms-win-core-synch-l1-2-0.dll",
       "kernel32.dll",
       "ntdll.dll"
@@ -177,23 +178,13 @@
   },
   "checks": [
     {
-      "check": "kurosaki-core library unit tests, including CHR decoding and FDS waveform-period measurements",
-      "cases": 50,
+      "check": "kurosaki-core library unit tests, including PPU read buffering and snapshot round trip",
+      "cases": 53,
       "result": "all passed"
     },
     {
-      "check": "FC sound lessons: APU, DMC, VRC6, VRC7, FDS, MIDI; RAM, screen pixels and recorded PCM/port timing",
-      "cases": 6,
-      "result": "all passed"
-    },
-    {
-      "check": "Compiler/emulator regression scripts covering memory, bits, RNG, OAM, interrupts, PPU, callbacks, physics and library lessons",
-      "scripts": 16,
-      "result": "all passed"
-    },
-    {
-      "check": "Interrupt and PPU register state cases",
-      "cases": 52,
+      "check": "CHR RAM and switched CHR ROM reads with the distributed static-CRT executable",
+      "cases": 2,
       "result": "all passed"
     }
   ],
