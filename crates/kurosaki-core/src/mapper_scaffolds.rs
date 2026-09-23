@@ -9,7 +9,7 @@
 use crate::cart::Mirroring;
 use crate::mapper::{
     bank_count, ensure_chr, mapper_debug_state, mirroring_name, physical_bank_8k, read_bank,
-    trace_mapper_write, write_bank, Mapper, MapperDebugState,
+    trace_mapper_write, write_bank, Mapper, MapperDebugState, NametableMirroring,
 };
 use crate::mapper_db::{mapper_spec, MapperSpec};
 use crate::trace::{TraceConfig, TraceEvent, TraceSink};
@@ -105,8 +105,8 @@ impl Mmc5Mapper {
         self.chr_regs[slot] as usize % count
     }
 
-    // Describe the nametable-mode register and header mirroring for debug
-    // output; this type inherits the runtime four-screen mirroring fallback.
+    // Describe the nametable-mode register and header metadata for debug output.
+    // CIRAM-only modes drive the PPU; ExRAM/fill modes remain scaffold-only.
     fn mmc5_mirroring_name(&self) -> String {
         format!(
             "mmc5_nt_mode_{:02X}/{}",
@@ -124,6 +124,20 @@ impl Mapper for Mmc5Mapper {
     // Return a label that identifies the implementation as a scaffold.
     fn mapper_name(&self) -> &'static str {
         "MMC5/ExROM scaffold"
+    }
+
+    // Decode all sixteen CIRAM-only arrangements, including diagonal layouts.
+    // Selectors 2/3 need ExRAM/fill fetch support, which this scaffold does not
+    // implement; retain its four-screen fallback for those unsupported modes.
+    fn nametable_mirroring(&self) -> NametableMirroring {
+        if self.nametable_mode & 0xAA != 0 {
+            return NametableMirroring::FourScreen;
+        }
+        let mut pages = 0;
+        for table in 0..4 {
+            pages |= ((self.nametable_mode >> (table * 2)) & 1) << table;
+        }
+        NametableMirroring::CiramPages(pages)
     }
 
     // Resolve a CPU ROM address through the modeled 8 KiB PRG slots, leaving
@@ -1949,7 +1963,7 @@ pub struct Sunsoft5bMapper {
     prg_ram: Vec<u8>,
     chr: Vec<u8>,
     chr_ram: bool,
-    mirroring: Mirroring,
+    mirroring: NametableMirroring,
     battery: bool,
     command: u8,
     prg_regs: [u8; 4],
@@ -1973,7 +1987,11 @@ impl Sunsoft5bMapper {
             prg_ram: vec![0; 8 * 1024],
             chr,
             chr_ram,
-            mirroring,
+            mirroring: if mirroring == Mirroring::Horizontal {
+                NametableMirroring::Horizontal
+            } else {
+                NametableMirroring::Vertical
+            },
             battery,
             command: 0,
             prg_regs: [0, 1, c.saturating_sub(2) as u8, c.saturating_sub(1) as u8],
@@ -2084,11 +2102,12 @@ impl Mapper for Sunsoft5bMapper {
                 // the effective upper PRG window stays fixed to the final ROM bank.
                 11 => self.prg_regs[3] = value,
                 12 => {
-                    self.mirroring = if value & 1 == 0 {
-                        Mirroring::Vertical
-                    } else {
-                        Mirroring::Horizontal
-                    }
+                    self.mirroring = match value & 3 {
+                        0 => NametableMirroring::Vertical,
+                        1 => NametableMirroring::Horizontal,
+                        2 => NametableMirroring::SingleScreenLow,
+                        _ => NametableMirroring::SingleScreenHigh,
+                    };
                 }
                 13 => {
                     self.irq_enabled = value & 1 != 0;
@@ -2188,8 +2207,11 @@ impl Mapper for Sunsoft5bMapper {
     fn clear_irq(&mut self) {
         self.irq_pending_flag = false;
     }
-    // Report bank registers, diagnostic metadata and pending IRQ. The
-    // mirroring string does not override the trait's four-screen runtime policy.
+    // Apply command $0C to the actual PPU nametable address mapping.
+    fn nametable_mirroring(&self) -> NametableMirroring {
+        self.mirroring
+    }
+    // Report effective banks, mirroring and pending IRQ.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             69,
@@ -2200,13 +2222,20 @@ impl Mapper for Sunsoft5bMapper {
             false,
             self.prg_windows().iter().map(|b| *b as u16).collect(),
             self.chr_regs.iter().map(|v| *v as u16).collect(),
-            mirroring_name(self.mirroring),
+            match self.mirroring {
+                NametableMirroring::Vertical => "vertical",
+                NametableMirroring::Horizontal => "horizontal",
+                NametableMirroring::SingleScreenLow => "single_screen_low",
+                NametableMirroring::SingleScreenHigh => "single_screen_high",
+                _ => unreachable!("invalid FME-7 mirroring"),
+            }
+            .to_string(),
             self.irq_pending(),
         )
     }
     // Serialize command/IRQ/audio fields, bank and audio shadows, work RAM
-    // and optional CHR RAM. Mutable mirroring is omitted; battery export
-    // and private restore remain unsupported through the trait defaults.
+    // and optional CHR RAM, followed by the two-bit mirroring selector. Battery
+    // export and private restore remain unsupported through the trait defaults.
     fn snapshot_bytes(&self) -> Vec<u8> {
         let mut v = vec![
             self.command,
@@ -2224,6 +2253,14 @@ impl Mapper for Sunsoft5bMapper {
         if self.chr_ram {
             v.extend_from_slice(&self.chr);
         }
+        // Append the effective command $0C value without shifting older fields.
+        v.push(match self.mirroring {
+            NametableMirroring::Vertical => 0,
+            NametableMirroring::Horizontal => 1,
+            NametableMirroring::SingleScreenLow => 2,
+            NametableMirroring::SingleScreenHigh => 3,
+            _ => unreachable!("invalid FME-7 mirroring"),
+        });
         v
     }
 }

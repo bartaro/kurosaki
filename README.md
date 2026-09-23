@@ -47,6 +47,10 @@ A current stable Rust toolchain. On Windows, install Visual Studio Build Tools w
 .\kurosaki.exe --help
 ```
 
+### Nametable mapping
+
+AxROM supports lower/upper single-screen selection. FME7 supports vertical, horizontal and both single-screen modes. MMC5 supports all sixteen layouts that use the two CIRAM pages; ExRAM and fill rendering remain unsupported. See the [mode table and executed examples](https://bartaro.github.io/kitaq-docs/en/kitaqfc.html#api-__mirroring_set).
+
 ### Manuals and licenses
 
 - [Japanese HTML manuals](https://bartaro.github.io/kitaq-docs/kurosaki.html) / [English manuals](https://bartaro.github.io/kitaq-docs/en/kurosaki.html)
@@ -97,6 +101,10 @@ CLI、トレース、Pythonインターフェースを備えた、NES・ファ�
 .\scripts\build.ps1
 .\kurosaki.exe --help
 ```
+
+### 画面RAMの割り当て
+
+AxROMは下側・上側1画面、FME7は縦・横・下側・上側1画面に対応します。MMC5は本体CIRAMの2ページを使う16通りの配置に対応し、ExRAMと塗りつぶし描画は未対応です。[モード表と実行サンプル](https://bartaro.github.io/kitaq-docs/kitaqfc.html#api-__mirroring_set)を参照してください。
 
 ### マニュアルとライセンス
 

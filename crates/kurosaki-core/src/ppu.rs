@@ -783,6 +783,7 @@ impl PpuState {
                 NametableMirroring::SingleScreenLow => 0,
                 NametableMirroring::SingleScreenHigh => 1,
                 NametableMirroring::FourScreen => logical_table,
+                NametableMirroring::CiramPages(pages) => (pages as u16 >> logical_table) & 1,
             };
             return 0x2000 + physical_table * 0x0400 + (offset & 0x03FF);
         }

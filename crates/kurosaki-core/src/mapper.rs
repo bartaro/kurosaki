@@ -35,6 +35,9 @@ pub enum NametableMirroring {
     FourScreen,
     SingleScreenLow,
     SingleScreenHigh,
+    /// One bit per logical nametable selects CIRAM page 0 or 1.
+    /// This supports independently selected pages without allocating extra RAM.
+    CiramPages(u8),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,6 +698,7 @@ impl Mapper for NromMapper {
                 NametableMirroring::FourScreen => "four_screen".to_string(),
                 NametableMirroring::SingleScreenLow => "single_screen_low".to_string(),
                 NametableMirroring::SingleScreenHigh => "single_screen_high".to_string(),
+                NametableMirroring::CiramPages(pages) => format!("ciram_pages_{pages:04b}"),
             },
             false,
         )
@@ -1666,9 +1670,8 @@ impl Mapper for AxromMapper {
             0
         }
     }
-    // Latch PRG bits 0-2 and the single-screen selector in bit 4, then trace
-    // the selection. The selector is stored/reported here, but this type has
-    // no nametable_mirroring override and uses the trait's four-screen fallback.
+    // Latch PRG bits 0-2 and the CIRAM page selector in bit 4, then trace
+    // the selection. Both register fields take effect on the next bus access.
     fn write_prg(
         &mut self,
         addr: u16,
@@ -1707,8 +1710,15 @@ impl Mapper for AxromMapper {
             self.chr[(addr as usize) % len] = value;
         }
     }
-    // Report the stored single-screen selector and PRG bank. The mirroring
-    // text describes the register; it does not itself drive PPU mirroring.
+    // Route all four logical nametables to the selected 1 KiB CIRAM page.
+    fn nametable_mirroring(&self) -> NametableMirroring {
+        if self.single_screen_high {
+            NametableMirroring::SingleScreenHigh
+        } else {
+            NametableMirroring::SingleScreenLow
+        }
+    }
+    // Report the effective single-screen selector and PRG bank.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             7,
@@ -2673,6 +2683,7 @@ impl Mapper for Mmc2Mmc4Mapper {
                 NametableMirroring::FourScreen => "four_screen",
                 NametableMirroring::SingleScreenLow => "single_screen_low",
                 NametableMirroring::SingleScreenHigh => "single_screen_high",
+                NametableMirroring::CiramPages(_) => "independent_ciram_pages",
             }
             .to_string(),
             false,
@@ -2690,7 +2701,15 @@ impl Mapper for Mmc2Mmc4Mapper {
             self.chr_banks[3],
             self.latch0_fe as u8,
             self.latch1_fe as u8,
-            self.mirroring as u8,
+            match self.mirroring {
+                NametableMirroring::Horizontal => 0,
+                NametableMirroring::Vertical => 1,
+                NametableMirroring::FourScreen => 2,
+                NametableMirroring::SingleScreenLow => 3,
+                NametableMirroring::SingleScreenHigh => 4,
+                // MMC2/MMC4 cannot select independently mapped CIRAM pages.
+                NametableMirroring::CiramPages(_) => unreachable!("invalid MMC2/MMC4 mirroring"),
+            },
         ];
         bytes.extend_from_slice(&self.chr);
         bytes
@@ -3114,6 +3133,7 @@ impl Mapper for Mmc3Mapper {
                 NametableMirroring::FourScreen => "four_screen".to_string(),
                 NametableMirroring::SingleScreenLow => "single_screen_low".to_string(),
                 NametableMirroring::SingleScreenHigh => "single_screen_high".to_string(),
+                NametableMirroring::CiramPages(pages) => format!("ciram_pages_{pages:04b}"),
             },
             self.irq_pending(),
         )
