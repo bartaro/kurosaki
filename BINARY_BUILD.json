@@ -4,7 +4,7 @@
   "configuration": "Release",
   "build_command": ".\\scripts\\build.ps1 -Offline",
   "build_exit_code": 0,
-  "source_revision_before_packaging": "4d0f531d150c8c9a207ca9c0c2115db9b6c20666",
+  "source_revision_before_packaging": "46eaefed353f1e03dfee30afea2182f9fca3be3e",
   "source_state": "Reviewed publication working tree; source_inputs hashes identify the recorded files.",
   "source_inventory_scope": "Public Rust workspace and build scripts; the executable contains the CLI dependency closure.",
   "source_inputs": [
@@ -114,7 +114,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/ppu.rs",
-      "sha256": "8b69d3409ee9c30cafc55b1a6acc815afeadf090b0dc80db927ef311f713b0a9"
+      "sha256": "d249e738b202b0052e3e5b4fa37d6bc237c270d448288782b92c9ccb74094295"
     },
     {
       "path": "crates/kurosaki-core/src/replay.rs",
@@ -172,7 +172,7 @@
   "binary": {
     "path": "kurosaki.exe",
     "bytes": 2513920,
-    "sha256": "39e6afb1e1bfc242c01a264b78f6e7fda5d18bd311fe231ec823b1d90d7d7d13",
+    "sha256": "972a5c29a9681616e612f91028bb8cca4daf5c2ce0f03e6718fc2160cb38b60d",
     "imported_system_dlls": [
       "kernel32.dll",
       "ntdll.dll",
@@ -182,8 +182,8 @@
   },
   "checks": [
     {
-      "check": "Core library unit tests",
-      "cases": 53,
+      "check": "Core library tests, including pre-render status clearing and sprite-hit status reads",
+      "cases": 55,
       "result": "all passed"
     },
     {
@@ -204,6 +204,16 @@
     {
       "check": "Executed mapper lessons, IRQ delivery, observed RAM and displayed labels; default and -O0",
       "cases": 14,
+      "result": "all passed"
+    },
+    {
+      "check": "Sprite-zero wait and split lessons: default and -O0; full colored-image checks and frame progression",
+      "cases": 6,
+      "result": "all passed"
+    },
+    {
+      "check": "Sprite-zero hit prerequisites, blocking cases and deferred vertical scroll: default and -O0",
+      "cases": 18,
       "result": "all passed"
     }
   ],

@@ -360,10 +360,21 @@ impl PpuState {
         // chunk uses the caller's frame/cycle label rather than a per-fetch clock.
         let mut ppu_ticks = cpu_cycles.saturating_mul(3);
         while ppu_ticks > 0 {
-            let remaining_in_line = (DOTS_PER_SCANLINE - self.dot) as u64;
+            // Split the pre-render line at dot 1 so status flags clear even
+            // with rendering disabled. Polling sprite zero needs this edge
+            // every frame, independently of the scanline renderer below.
+            let next_dot = if self.scanline == SCANLINES_PER_NTSC_FRAME - 1 && self.dot == 0 {
+                1
+            } else {
+                DOTS_PER_SCANLINE
+            };
+            let remaining_in_line = (next_dot - self.dot) as u64;
             let step = ppu_ticks.min(remaining_in_line);
             self.dot += step as u16;
             ppu_ticks -= step;
+            if self.scanline == SCANLINES_PER_NTSC_FRAME - 1 && self.dot == 1 {
+                self.end_vblank();
+            }
             if self.dot >= DOTS_PER_SCANLINE {
                 self.dot = 0;
                 if self.scanline >= 0 && self.scanline < 240 {
@@ -388,7 +399,6 @@ impl PpuState {
                     nmi_requested |= self.begin_vblank(frame, cpu_cycle, trace_cfg, sink);
                 } else if self.scanline >= SCANLINES_PER_NTSC_FRAME {
                     self.scanline = 0;
-                    self.end_vblank();
                     self.rendered_frames += 1;
                     self.last_pixel_hash = self.compute_pixel_hash();
                     if trace_cfg.ppu {
@@ -431,10 +441,10 @@ impl PpuState {
         self.ctrl & 0x80 != 0
     }
 
-    // Clear only the vblank status bit and suppression flag. Sprite-hit and
-    // overflow bits are not cleared by this current end-of-frame helper.
+    // At pre-render dot 1, clear VBlank, sprite-zero hit and sprite overflow.
+    // Cumulative diagnostic counters remain available across frame boundaries.
     pub fn end_vblank(&mut self) {
-        self.status &= !0x80;
+        self.status &= !0xE0;
         self.suppress_next_vblank_status = false;
     }
 
@@ -841,6 +851,39 @@ mod tests {
     use super::PpuState;
     use crate::mapper::NametableMirroring;
     use crate::trace::{TraceConfig, TraceSink};
+
+    #[test]
+    fn pre_render_dot_one_clears_all_three_status_flags_with_or_without_rendering() {
+        for mask in [0, 0x18] {
+            let mut ppu = PpuState {
+                scanline: 260,
+                dot: 338,
+                status: 0xFB,
+                mask,
+                sprite0_hit_candidates: 7,
+                sprite_overflow_candidates: 3,
+                ..PpuState::default()
+            };
+            let mut sink = TraceSink::default();
+            // Reach pre-render dot 0: the previous frame's flags still exist.
+            ppu.clock_cpu_cycles(1, 0, 0, TraceConfig::none(), &mut sink, |_, _, _, _, _| 0);
+            assert_eq!((ppu.scanline, ppu.dot, ppu.status), (261, 0, 0xFB));
+            // The next CPU cycle crosses dot 1 and clears bits 5, 6 and 7.
+            ppu.clock_cpu_cycles(1, 0, 1, TraceConfig::none(), &mut sink, |_, _, _, _, _| 0);
+            assert_eq!((ppu.scanline, ppu.dot, ppu.status), (261, 3, 0x1B));
+            assert_eq!(ppu.sprite0_hit_candidates, 7);
+            assert_eq!(ppu.sprite_overflow_candidates, 3);
+        }
+    }
+
+    #[test]
+    fn status_reads_do_not_acknowledge_sprite_hit_or_overflow() {
+        let mut ppu = PpuState { status: 0xE0, ..PpuState::default() };
+        let mut sink = TraceSink::default();
+        assert_eq!(ppu.read_register(0x2002, 0, 0, TraceConfig::none(), &mut sink), 0xE0);
+        assert_eq!(ppu.read_register(0x2002, 0, 0, TraceConfig::none(), &mut sink), 0x60);
+        assert_eq!(ppu.status, 0x60);
+    }
 
     #[test]
     fn ppudata_delays_nametable_reads_and_preserves_buffer_on_writes() {
