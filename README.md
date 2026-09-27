@@ -5,10 +5,11 @@
 | --- | --- |
 | English | [KUROSAKI](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) |
 | 日本語 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/kurosaki.html) |
+| 简体中文 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html) |
 <!-- manual-language-links:end -->
 
 
-[English](#english) | [日本語](#japanese)
+[English](#english) | [日本語](#japanese) | [简体中文](README.zh-CN.md)
 
 <a name="english"></a>
 
