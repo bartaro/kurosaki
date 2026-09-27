@@ -3,11 +3,19 @@
 <!-- manual-language-links:start -->
 | Language / 言語 | HTML |
 | --- | --- |
-| English | [KUROSAKI](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) · [KITAQFC](https://bartaro.github.io/kitaq-docs/en/kitaqfc.html) |
-| 日本語 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/kurosaki.html) · [KITAQFC](https://bartaro.github.io/kitaq-docs/kitaqfc.html) |
+| English | [KUROSAKI](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) |
+| 日本語 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/kurosaki.html) |
+| 한국어 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/ko/kurosaki.html) |
+| 简体中文 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html) |
+| 繁體中文 | [KUROSAKI](https://bartaro.github.io/kitaq-docs/zh-TW/kurosaki.html) |
+| Français | [KUROSAKI](https://bartaro.github.io/kitaq-docs/fr/kurosaki.html) |
+| Español | [KUROSAKI](https://bartaro.github.io/kitaq-docs/es/kurosaki.html) |
+| Deutsch | [KUROSAKI](https://bartaro.github.io/kitaq-docs/de/kurosaki.html) |
 <!-- manual-language-links:end -->
 
-[English](README.md) | [日本語](README.ja.md)
+<!-- readme-language-links:start -->
+**English** | [日本語](README.ja.md) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
 
 This source is intended to be built later with the current KITAQFC Phase26 tree

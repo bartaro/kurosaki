@@ -1,8 +1,10 @@
 # KUROSAKI
 
-[English](README.md#english) | [日本語](README.md#japanese) | **Français**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | **Français** | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-**Ouvrir le manuel de KUROSAKI en français**
+**[KUROSAKI · Manuel HTML](https://bartaro.github.io/kitaq-docs/fr/kurosaki.html)**
 
 Émulateur d’observation NES/Famicom/FDS avec interface en ligne de commande, traces et interface Python.
 
@@ -29,19 +31,16 @@ Pour recompiler, utilisez une version stable actuelle de Rust. Sous Windows, ins
 .\kurosaki.exe --help
 ```
 
+<!-- current-nametable-mapping -->
+## Mappage des tables de noms
+
+AxROM permet de choisir la page basse ou haute en mode écran unique. FME7 prend en charge les modes vertical, horizontal et les deux modes à écran unique. MMC5 gère les seize dispositions utilisant les deux pages CIRAM ; le rendu ExRAM et le remplissage ne sont pas pris en charge. [Table des modes et exemples exécutés](https://bartaro.github.io/kitaq-docs/fr/kitaqfc.html#api-__mirroring_set).
+
 ## Manuels et licences
 
-- Manuel en français
+- [KUROSAKI · Manuel HTML](https://bartaro.github.io/kitaq-docs/fr/kurosaki.html)
 - [Manuel en anglais](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) / [Manuel en japonais](https://bartaro.github.io/kitaq-docs/kurosaki.html)
 - [Sources du manuel pour lecture hors connexion](https://github.com/bartaro/kitaq-docs)
 - [Licence](LICENSE) / [Traduction japonaise à titre de référence](LICENSE.ja)
 
-La licence du projet ne remplace pas les conditions de tiers relatives aux dépendances, logos ou marques. Conservez les mentions jointes lors de la redistribution.
-
-## Contenu du paquet public
-
-Cette publication contient le cœur de l'émulateur, l'outil en ligne de commande et les API d'intégration. Les interfaces graphiques et la dépendance PLITA sont reportées à une publication ultérieure et ne figurent pas dans cette copie du dépôt.
-
-## Développement des interfaces graphiques
-
-KOKURA-GUI et KUROSAKI-GUI restent non publiés. Leur développement futur utilisera PLITA ; SDL-GUI et egui-GUI ne sont pas prévus pour ces projets. Ce dépôt continue de distribuer le cœur, l'outil en ligne de commande et les API d'intégration.
+La licence du projet ne remplace pas les conditions des tiers relatives aux dépendances, logos ou marques. Conservez les mentions jointes lors de la redistribution.

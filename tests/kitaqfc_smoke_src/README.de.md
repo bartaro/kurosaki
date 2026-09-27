@@ -1,8 +1,10 @@
 # KITAQFC-NROM-Quellcode für einen Basistest
 
-[English](README.md) | **Deutsch**
+<!-- readme-language-links:start -->
+[English](README.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | **Deutsch**
+<!-- readme-language-links:end -->
 
-**KUROSAKI-Handbuch** · **KITAQFC-Handbuch**
+**[KUROSAKI · HTML-Handbuch](https://bartaro.github.io/kitaq-docs/de/kurosaki.html) · [KITAQFC · HTML-Handbuch](https://bartaro.github.io/kitaq-docs/de/kitaqfc.html)**
 
 Dieser Quellcode ist dafür vorgesehen, später mit dem KITAQFC-Quellenstand Phase26 kompiliert und anschließend als vom Compiler erzeugte Referenz-ROM nach `crates/kurosaki-core/tests/fixtures/` kopiert zu werden.
 

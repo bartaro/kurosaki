@@ -1,8 +1,10 @@
 # Código fuente de la prueba básica NROM de KITAQFC
 
-[English](README.md) | [日本語](README.ja.md) | **Español**
+<!-- readme-language-links:start -->
+[English](README.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | **Español** | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-Manual de KUROSAKI en español · Manual de KITAQFC en español
+**[KUROSAKI · Manual HTML](https://bartaro.github.io/kitaq-docs/es/kurosaki.html) · [KITAQFC · Manual HTML](https://bartaro.github.io/kitaq-docs/es/kitaqfc.html)**
 
 Está previsto compilar este código con el árbol de desarrollo Phase26 de KITAQFC y copiar la ROM resultante a `crates/kurosaki-core/tests/fixtures/` como referencia de prueba. Esto no significa que ya se haya verificado su compilación.
 

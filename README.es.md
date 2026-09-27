@@ -1,8 +1,10 @@
 # KUROSAKI
 
-[English](README.md#english) | [日本語](README.md#japanese) | **Español**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | **Español** | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-**Abrir el manual de KUROSAKI en español**
+**[KUROSAKI · Manual HTML](https://bartaro.github.io/kitaq-docs/es/kurosaki.html)**
 
 Emulador de NES/Famicom/FDS orientado a observar la ejecución, con herramientas de línea de comandos, trazas e interfaz Python.
 
@@ -29,19 +31,16 @@ Para recompilar, utilice una versión estable reciente de Rust. En Windows tambi
 .\kurosaki.exe --help
 ```
 
+<!-- current-nametable-mapping -->
+## Mapeo de tablas de nombres
+
+AxROM permite seleccionar la página inferior o superior en modo de pantalla única. FME7 admite los modos vertical, horizontal y los dos de pantalla única. MMC5 admite las dieciséis disposiciones que usan las dos páginas CIRAM; el renderizado con ExRAM y el de relleno no están implementados. [Tabla de modos y ejemplos ejecutados](https://bartaro.github.io/kitaq-docs/es/kitaqfc.html#api-__mirroring_set).
+
 ## Manuales y licencias
 
-- Manual en español
+- [KUROSAKI · Manual HTML](https://bartaro.github.io/kitaq-docs/es/kurosaki.html)
 - [Manual en inglés](https://bartaro.github.io/kitaq-docs/en/kurosaki.html) / [Manual en japonés](https://bartaro.github.io/kitaq-docs/kurosaki.html)
 - [Archivos del manual para consultarlo sin conexión](https://github.com/bartaro/kitaq-docs)
 - [Licencia](LICENSE) / [Traducción japonesa de referencia](LICENSE.ja)
 
-La licencia del proyecto no sustituye las condiciones de terceros sobre dependencias, logotipos o marcas. Conserve los avisos adjuntos al redistribuir el software.
-
-## Contenido de esta publicación
-
-Se publican el núcleo del emulador, la herramienta de línea de comandos y las API de integración. Las interfaces gráficas y la dependencia de PLITA quedan para una publicación posterior y no forman parte de esta copia del código fuente.
-
-## Desarrollo de las interfaces gráficas
-
-KOKURA-GUI y KUROSAKI-GUI todavía no se han publicado. Su desarrollo futuro utilizará PLITA; no se utilizarán SDL-GUI ni egui-GUI. Este repositorio seguirá distribuyendo el núcleo, la herramienta de línea de comandos y las API de integración.
+La licencia del proyecto no sustituye las condiciones de terceros relativas a dependencias, logotipos o marcas. Conserva los avisos adjuntos al redistribuir.

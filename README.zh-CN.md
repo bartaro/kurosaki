@@ -1,6 +1,8 @@
 # KUROSAKI
 
-[English](README.md#english) | [日本語](README.md#japanese) | **简体中文**
+<!-- readme-language-links:start -->
+[English](README.md#english) | [日本語](README.md#japanese) | [한국어](README.ko.md) | **简体中文** | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
 [KUROSAKI 简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html)
 

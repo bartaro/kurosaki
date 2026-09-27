@@ -1,8 +1,10 @@
 # KITAQFC NROM 기본 동작 확인용 소스
 
-[English](README.md) | [日本語](README.ja.md) | **한국어**
+<!-- readme-language-links:start -->
+[English](README.md) | [日本語](README.ja.md) | **한국어** | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
-KUROSAKI 한국어 설명서 · KITAQFC 한국어 설명서
+**[KUROSAKI · HTML 설명서](https://bartaro.github.io/kitaq-docs/ko/kurosaki.html) · [KITAQFC · HTML 설명서](https://bartaro.github.io/kitaq-docs/ko/kitaqfc.html)**
 
 이 소스는 향후 KITAQFC Phase26 개발 트리에서 빌드한 뒤, 컴파일러로 생성한 기준 ROM으로 `crates/kurosaki-core/tests/fixtures/`에 복사하기 위해 준비했습니다. 해당 빌드가 이미 완료되었다는 뜻은 아닙니다.
 

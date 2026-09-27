@@ -1,6 +1,8 @@
 # KITAQFC NROM基本功能测试源码
 
-[English](README.md) | [日本語](README.ja.md) | **简体中文**
+<!-- readme-language-links:start -->
+[English](README.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | **简体中文** | [繁體中文](README.zh-TW.md) | [Français](README.fr.md) | [Español](README.es.md) | [Deutsch](README.de.md)
+<!-- readme-language-links:end -->
 
 [KUROSAKI 简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kurosaki.html) · [KITAQFC 简体中文手册](https://bartaro.github.io/kitaq-docs/zh-CN/kitaqfc.html)
 
