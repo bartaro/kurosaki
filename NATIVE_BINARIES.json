@@ -1,0 +1,159 @@
+{
+  "project": "kurosaki",
+  "scope": "CLI executables only",
+  "source_commit": "9fb29f93bf389b1fc5f89ac72f75bf79361663fc",
+  "ci_run": "https://github.com/bartaro/kitaqgb-rust-validation-20261004/actions/runs/37136661755",
+  "ci_repository_private": true,
+  "validation_commit": "86765faefd124ad1f1d00cd6e76f00e0a34f09c6",
+  "native_ci_passed": true,
+  "source_files_sha256_verified": true,
+  "license_notices_verified_against_archives": true,
+  "records": [
+    {
+      "path": "bin/macos-x86_64/kurosaki",
+      "sha256": "6d9f866f8f3692b01a96082e6d093261f28ce727744c1bc913878465d058acee",
+      "bytes": 2909372,
+      "source_commit": "9fb29f93bf389b1fc5f89ac72f75bf79361663fc",
+      "source_repository": "https://github.com/bartaro/kurosaki",
+      "system": "Darwin",
+      "machine": "x86_64",
+      "platform": "macOS-15.7.9-x86_64-i386-64bit",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "apple_sdk": "15.5",
+      "test_count": 112,
+      "native_execution_verified": true,
+      "executable_dependencies": "/Users/runner/work/kitaqgb-rust-validation-20261004/kitaqgb-rust-validation-20261004/projects/kurosaki/target/release/kurosaki:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n",
+      "format_verification": {
+        "format": "Mach-O64 x86_64",
+        "macos_deployment_targets": [
+          "10.12.0"
+        ]
+      },
+      "native_smoke_checks": [
+        {
+          "case": "cli-help",
+          "passed": true
+        },
+        {
+          "case": "battery-first-boot",
+          "passed": true
+        },
+        {
+          "case": "battery-second-boot",
+          "passed": true
+        },
+        {
+          "case": "snapshot-battery-export",
+          "passed": true
+        },
+        {
+          "case": "python-native-execution-and-state-roundtrip",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "5fee7b8536ec117eecd534627de0353e60637b1fc97cbdbf8aa2a2a51b030eec"
+    },
+    {
+      "path": "bin/linux-x86_64/kurosaki",
+      "sha256": "2455055bcdae0fcf00479d244a063333f699bf954e130075028833b3e3cae9ce",
+      "bytes": 3236216,
+      "source_commit": "9fb29f93bf389b1fc5f89ac72f75bf79361663fc",
+      "source_repository": "https://github.com/bartaro/kurosaki",
+      "system": "Linux",
+      "machine": "x86_64",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-unknown-linux-gnu\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "apple_sdk": null,
+      "test_count": 112,
+      "native_execution_verified": true,
+      "executable_dependencies": "\tlinux-vdso.so.1 (0x00007fad52d56000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fad52d16000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fad52917000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fad52600000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fad52d58000)\n",
+      "format_verification": {
+        "format": "ELF64 x86_64",
+        "glibc_symbol_version_tags": [
+          "GLIBC_2.2.5",
+          "GLIBC_2.3",
+          "GLIBC_2.3.4",
+          "GLIBC_2.4",
+          "GLIBC_2.14",
+          "GLIBC_2.16",
+          "GLIBC_2.17",
+          "GLIBC_2.18",
+          "GLIBC_2.28",
+          "GLIBC_2.29",
+          "GLIBC_2.30",
+          "GLIBC_2.32",
+          "GLIBC_2.33",
+          "GLIBC_2.34"
+        ],
+        "highest_glibc_symbol_version": "GLIBC_2.34"
+      },
+      "native_smoke_checks": [
+        {
+          "case": "cli-help",
+          "passed": true
+        },
+        {
+          "case": "battery-first-boot",
+          "passed": true
+        },
+        {
+          "case": "battery-second-boot",
+          "passed": true
+        },
+        {
+          "case": "snapshot-battery-export",
+          "passed": true
+        },
+        {
+          "case": "python-native-execution-and-state-roundtrip",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "6b5295b8f837a6af5f3772a631855c6a3eead5a7cdfed8d2b353e3b57c0e706a"
+    },
+    {
+      "path": "bin/macos-arm64/kurosaki",
+      "sha256": "128a1b3a8708757a5ec88a1d50829ce305909160250eb2e4248b8898faa728ce",
+      "bytes": 2525392,
+      "source_commit": "9fb29f93bf389b1fc5f89ac72f75bf79361663fc",
+      "source_repository": "https://github.com/bartaro/kurosaki",
+      "system": "Darwin",
+      "machine": "arm64",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "apple_sdk": "26.5",
+      "test_count": 112,
+      "native_execution_verified": true,
+      "executable_dependencies": "/Users/runner/work/kitaqgb-rust-validation-20261004/kitaqgb-rust-validation-20261004/projects/kurosaki/target/release/kurosaki:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)\n",
+      "format_verification": {
+        "format": "Mach-O64 arm64",
+        "macos_deployment_targets": [
+          "11.0.0"
+        ]
+      },
+      "native_smoke_checks": [
+        {
+          "case": "cli-help",
+          "passed": true
+        },
+        {
+          "case": "battery-first-boot",
+          "passed": true
+        },
+        {
+          "case": "battery-second-boot",
+          "passed": true
+        },
+        {
+          "case": "snapshot-battery-export",
+          "passed": true
+        },
+        {
+          "case": "python-native-execution-and-state-roundtrip",
+          "passed": true
+        }
+      ],
+      "verified_original_archive_sha256": "1068431fba0613db3a720971f6017762f098191bfc0e0503a4916a991a607c77"
+    }
+  ]
+}

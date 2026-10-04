@@ -39,3 +39,28 @@
 - [许可证](LICENSE) / [日文参考译文](LICENSE.ja)
 
 项目许可证不能替代第三方对依赖库、标志或商标规定的条件。再分发时请保留随附声明。
+
+
+<!-- native-platform-binaries-20261004-zh-CN -->
+### 预编译的Linux和macOS CLI
+
+经过GitHub Actions运行验证的CLI文件位于以下文件夹中。运行CLI无需安装Rust、Python或.NET。Linux版本面向x86_64/glibc；macOS请选择与CPU匹配的版本。
+
+| OS / CPU | CLI |
+| --- | --- |
+| Linux x86_64 (glibc) | [bin/linux-x86_64/kurosaki](bin/linux-x86_64/kurosaki) |
+| macOS ARM64 | [bin/macos-arm64/kurosaki](bin/macos-arm64/kurosaki) |
+| macOS Intel | [bin/macos-x86_64/kurosaki](bin/macos-x86_64/kurosaki) |
+
+```sh
+chmod +x bin/linux-x86_64/kurosaki
+./bin/linux-x86_64/kurosaki --help
+
+chmod +x bin/macos-arm64/kurosaki
+./bin/macos-arm64/kurosaki --help
+
+chmod +x bin/macos-x86_64/kurosaki
+./bin/macos-x86_64/kurosaki --help
+```
+
+请在仓库根目录执行命令。重新分发时请保留LICENSE、LICENSE.ja、BINARY_NOTICES.md和licenses/。NATIVE_BINARIES.json记录了哈希值、依赖项、源代码版本和原生运行验证结果。

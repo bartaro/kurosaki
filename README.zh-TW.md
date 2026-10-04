@@ -44,3 +44,28 @@ AxROM 支援下頁／上頁的單畫面選擇。FME7 支援垂直、水平及兩
 - [授權條款](LICENSE)／[日文參考譯文](LICENSE.ja)
 
 專案授權不會取代第三方相依元件、標誌或商標的使用條件。重新散布時請保留隨附聲明。
+
+
+<!-- native-platform-binaries-20261004-zh-TW -->
+### 預先編譯的Linux與macOS CLI
+
+經GitHub Actions執行驗證的CLI檔案位於下列資料夾。執行CLI不需要安裝Rust、Python或.NET。Linux版本適用於x86_64/glibc；macOS請選擇符合CPU的版本。
+
+| OS / CPU | CLI |
+| --- | --- |
+| Linux x86_64 (glibc) | [bin/linux-x86_64/kurosaki](bin/linux-x86_64/kurosaki) |
+| macOS ARM64 | [bin/macos-arm64/kurosaki](bin/macos-arm64/kurosaki) |
+| macOS Intel | [bin/macos-x86_64/kurosaki](bin/macos-x86_64/kurosaki) |
+
+```sh
+chmod +x bin/linux-x86_64/kurosaki
+./bin/linux-x86_64/kurosaki --help
+
+chmod +x bin/macos-arm64/kurosaki
+./bin/macos-arm64/kurosaki --help
+
+chmod +x bin/macos-x86_64/kurosaki
+./bin/macos-x86_64/kurosaki --help
+```
+
+請在儲存庫根目錄執行指令。重新散布時請保留LICENSE、LICENSE.ja、BINARY_NOTICES.md及licenses/。NATIVE_BINARIES.json記錄雜湊值、相依項目、原始碼版本與原生執行驗證結果。

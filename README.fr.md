@@ -44,3 +44,28 @@ AxROM permet de choisir la page basse ou haute en mode écran unique. FME7 prend
 - [Licence](LICENSE) / [Traduction japonaise à titre de référence](LICENSE.ja)
 
 La licence du projet ne remplace pas les conditions des tiers relatives aux dépendances, logos ou marques. Conservez les mentions jointes lors de la redistribution.
+
+
+<!-- native-platform-binaries-20261004-fr -->
+### CLI précompilées pour Linux et macOS
+
+Les CLI dont l’exécution a été vérifiée dans GitHub Actions se trouvent dans les dossiers ci-dessous. Leur exécution ne nécessite ni Rust, ni Python, ni .NET. La version Linux cible x86_64/glibc ; sous macOS, choisissez la version correspondant au processeur.
+
+| OS / CPU | CLI |
+| --- | --- |
+| Linux x86_64 (glibc) | [bin/linux-x86_64/kurosaki](bin/linux-x86_64/kurosaki) |
+| macOS ARM64 | [bin/macos-arm64/kurosaki](bin/macos-arm64/kurosaki) |
+| macOS Intel | [bin/macos-x86_64/kurosaki](bin/macos-x86_64/kurosaki) |
+
+```sh
+chmod +x bin/linux-x86_64/kurosaki
+./bin/linux-x86_64/kurosaki --help
+
+chmod +x bin/macos-arm64/kurosaki
+./bin/macos-arm64/kurosaki --help
+
+chmod +x bin/macos-x86_64/kurosaki
+./bin/macos-x86_64/kurosaki --help
+```
+
+Exécutez les commandes à la racine du dépôt. Pour redistribuer les fichiers, conservez LICENSE, LICENSE.ja, BINARY_NOTICES.md et licenses/. NATIVE_BINARIES.json contient les empreintes, les dépendances, les révisions du code source et les résultats des vérifications natives.
