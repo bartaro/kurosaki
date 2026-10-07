@@ -340,19 +340,11 @@ pub fn analyze_emulator(
 fn analyze_with_mapping(
     cart: &Cartridge,
     mapping: &AddressMapping,
-    reset_pc: u16,
+    current_pc: u16,
     mapper_name: &str,
     options: &DecompileOptions,
 ) -> DecompileReport {
-    // The supplied current PC is initially labeled Reset even for a restored
-    // snapshot; vectors are also read from the captured PRG mapping.
     let mut roots: BTreeMap<DecompileAddress, (String, String)> = BTreeMap::new();
-    insert_root(
-        &mut roots,
-        mapping.map_cpu_addr(reset_pc),
-        "Reset".to_string(),
-        "reset_vector".to_string(),
-    );
     for (vector, name, kind) in [
         (0xFFFA, "Nmi", "nmi_vector"),
         (0xFFFC, "Reset", "reset_vector"),
@@ -365,6 +357,14 @@ fn analyze_with_mapping(
             name.to_string(),
             kind.to_string(),
         );
+    }
+    // A restored snapshot can stop at any instruction, not just at reset.
+    // Preserve actual vector identities and add an observed current-PC root
+    // only when that address is not already a vector root.
+    if let Some(address) = mapping.map_cpu_addr(current_pc) {
+        roots
+            .entry(address)
+            .or_insert_with(|| (auto_function_name(address), "current_pc".to_string()));
     }
     for selector in &options.selected_functions {
         if let Some(address) = parse_address_selector(selector) {
@@ -1578,6 +1578,80 @@ mod tests {
         bytes[vector - 2..vector].copy_from_slice(&reset.to_le_bytes());
         bytes[vector + 2..vector + 4].copy_from_slice(&reset.to_le_bytes());
         Cartridge::from_bytes(&bytes).unwrap()
+    }
+
+    #[test]
+    fn restored_current_pc_is_not_a_reset_vector() {
+        let prg = vec![0x60; 16 * 1024];
+        let mut emulator = Emulator::from_cartridge(synthetic_nrom(&prg, 0xC000)).unwrap();
+        emulator.reset(TraceConfig::none());
+        emulator.cpu.pc = 0xC040;
+        let report = analyze_emulator(&emulator, &DecompileOptions::default()).unwrap();
+        let current = report
+            .functions
+            .iter()
+            .find(|function| function.start.cpu_addr == 0xC040)
+            .unwrap();
+        assert_eq!(current.source_kind, "current_pc");
+        assert_ne!(current.name, "Reset");
+        let reset = report
+            .functions
+            .iter()
+            .find(|function| function.source_kind == "reset_vector")
+            .unwrap();
+        assert_eq!(reset.start.cpu_addr, 0xC000);
+    }
+
+    #[test]
+    fn restored_irq_pc_keeps_actual_vector_identity() {
+        let prg = vec![0x40; 16 * 1024];
+        let mut cart = synthetic_nrom(&prg, 0xC000);
+        cart.prg_rom[0x3FFA..0x3FFC].copy_from_slice(&0xC010_u16.to_le_bytes());
+        cart.prg_rom[0x3FFE..0x4000].copy_from_slice(&0xC020_u16.to_le_bytes());
+        let mut emulator = Emulator::from_cartridge(cart).unwrap();
+        emulator.reset(TraceConfig::none());
+        emulator.cpu.pc = 0xC020;
+        let report = analyze_emulator(&emulator, &DecompileOptions::default()).unwrap();
+        let irq = report
+            .functions
+            .iter()
+            .find(|function| function.start.cpu_addr == 0xC020)
+            .unwrap();
+        assert_eq!(irq.source_kind, "irq_vector");
+        assert_eq!(irq.name, "Irq");
+    }
+
+    #[test]
+    fn selected_snapshot_pc_is_not_promoted_to_reset() {
+        let prg = vec![0x60; 16 * 1024];
+        let mut emulator = Emulator::from_cartridge(synthetic_nrom(&prg, 0xC000)).unwrap();
+        emulator.reset(TraceConfig::none());
+        emulator.cpu.pc = 0xC040;
+        let options = DecompileOptions {
+            selected_functions: vec!["B001:$C040".to_string()],
+            ..DecompileOptions::default()
+        };
+        let report = analyze_emulator(&emulator, &options).unwrap();
+        assert_eq!(report.functions.len(), 1);
+        assert_eq!(report.functions[0].source_kind, "selected");
+        assert_ne!(report.functions[0].name, "Reset");
+    }
+
+    #[test]
+    fn ram_snapshot_pc_does_not_replace_rom_reset_root() {
+        let prg = vec![0x60; 16 * 1024];
+        let mut emulator = Emulator::from_cartridge(synthetic_nrom(&prg, 0xC000)).unwrap();
+        emulator.reset(TraceConfig::none());
+        emulator.cpu.pc = 0x40;
+        let report = analyze_emulator(&emulator, &DecompileOptions::default()).unwrap();
+        assert!(report
+            .functions
+            .iter()
+            .all(|function| function.start.cpu_addr >= 0x8000));
+        assert!(report
+            .functions
+            .iter()
+            .any(|function| function.name == "Reset" && function.start.cpu_addr == 0xC000));
     }
 
     #[test]

@@ -932,6 +932,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn snapshot_json_preserves_generated_fraction_bits() {
+        let mut bits = 0x4d59_5df4_d0f3_3173u64;
+        for _ in 0..256 {
+            bits = bits.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let fraction = f64::from_bits((1020u64 << 52) | (bits & ((1u64 << 52) - 1)));
+            let apu = ApuState {
+                sample_clock_accum: fraction,
+                pulse_phase: [fraction, -fraction],
+                triangle_phase: fraction,
+                noise_clock_accum: fraction,
+                pulse_timer_accum: [fraction, fraction * 2.0],
+                triangle_timer_accum: fraction,
+                frame_cycle_accum: fraction,
+                dmc_timer_accum: fraction,
+                dc_last_input: fraction,
+                dc_last_output: -fraction,
+                ..ApuState::default()
+            };
+            for json in [
+                serde_json::to_string(&apu).unwrap(),
+                serde_json::to_string_pretty(&apu).unwrap(),
+            ] {
+                let restored: ApuState = serde_json::from_str(&json).unwrap();
+                assert_eq!(restored.noise_clock_accum.to_bits(), fraction.to_bits());
+                assert_eq!(
+                    serde_json::to_string(&restored).unwrap(),
+                    serde_json::to_string(&apu).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snapshot_json_preserves_native_noise_continuation() {
+        for period in 0..16 {
+            let mut apu = ApuState::default();
+            let mut sink = TraceSink::default();
+            apu.write_register(0x4015, 0x08, 0, 0, TraceConfig::none(), &mut sink);
+            apu.write_register(0x400c, 0x1f, 0, 0, TraceConfig::none(), &mut sink);
+            apu.write_register(0x400e, period, 0, 0, TraceConfig::none(), &mut sink);
+            apu.write_register(0x400f, 0x08, 0, 0, TraceConfig::none(), &mut sink);
+            for cycles in [3, 7, 11, 17, 101, 251, 709] {
+                apu.clock_cpu_cycles(cycles, 0, 0, TraceConfig::none(), &mut sink);
+            }
+            let json = serde_json::to_string_pretty(&apu).unwrap();
+            let mut restored: ApuState = serde_json::from_str(&json).unwrap();
+            assert_eq!(
+                serde_json::to_string(&restored).unwrap(),
+                serde_json::to_string(&apu).unwrap()
+            );
+            for cycles in [2, 3, 5, 31, 127, 997, 29_780] {
+                apu.clock_cpu_cycles(cycles, 1, 0, TraceConfig::none(), &mut sink);
+                restored.clock_cpu_cycles(cycles, 1, 0, TraceConfig::none(), &mut sink);
+                assert_eq!(
+                    serde_json::to_string(&restored).unwrap(),
+                    serde_json::to_string(&apu).unwrap()
+                );
+                assert_eq!(restored.sample_buffer, apu.sample_buffer);
+            }
+        }
+    }
+
+    #[test]
     // Program an original one-byte DMC sample and check that enable requests
     // the expected $C080 fetch address.
     fn dmc_registers_start_sample_request() {
