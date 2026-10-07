@@ -1,12 +1,8 @@
 {
-  "built_on": "2026-09-23",
+  "built_on": "2026-10-07",
   "licensor": "DAISUKE OBA",
   "configuration": "Release",
-  "build_command": ".\\scripts\\build.ps1 -Offline",
-  "build_exit_code": 0,
-  "source_revision_before_packaging": "46eaefed353f1e03dfee30afea2182f9fca3be3e",
-  "source_state": "Reviewed publication working tree; source_inputs hashes identify the recorded files.",
-  "source_inventory_scope": "Public Rust workspace and build scripts; the executable contains the CLI dependency closure.",
+  "source_revision_before_packaging": "d13bd6e92531fb5c80a00ccbe6f458bca4411ee0",
   "source_inputs": [
     {
       "path": "Cargo.lock",
@@ -14,7 +10,7 @@
     },
     {
       "path": "Cargo.toml",
-      "sha256": "3bdaa5b0488561b7d36a44be7340dafd8148ca8b6315e23a197a3f50bf21d061"
+      "sha256": "6fce4cd21e7752909a61d207fb7da06e856955de095315e0afa64d009d14cedd"
     },
     {
       "path": "crates/kurosaki-cli/Cargo.toml",
@@ -29,12 +25,16 @@
       "sha256": "50501a54ec6830d66bd156abe3fa2baf105e4886b0383bcfc2eeabf21cab7659"
     },
     {
+      "path": "crates/kurosaki-cli/tests/snapshot_float_roundtrip_cli.rs",
+      "sha256": "7879207f5d95c3a7e38696622a30587e6006e90b5acf6446134b6db08b9dded2"
+    },
+    {
       "path": "crates/kurosaki-core/Cargo.toml",
       "sha256": "4e81ad2e59c59bea0a862655f1da43610c56dbd9d0f1e14c455ccc8045f06fd6"
     },
     {
       "path": "crates/kurosaki-core/src/apu.rs",
-      "sha256": "42f15101fb7abe235449f18e42319ef32809e062b1e362a7efea062eab4f1bf6"
+      "sha256": "3e845abad2b51006328276f9615d3d575dab7034d722d2b0bbb77ba5213a1a44"
     },
     {
       "path": "crates/kurosaki-core/src/battery.rs",
@@ -62,7 +62,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/decompile.rs",
-      "sha256": "5e5dc4e8f72d3f14425660cd47d09367b1ba06c0bd18352117c302971e8db9f7"
+      "sha256": "eb57501a62ee587f94e1b9bbf920d29cdf8f4454dfb74f162ee153e13c6a8e94"
     },
     {
       "path": "crates/kurosaki-core/src/diagnostic_events.rs",
@@ -145,8 +145,16 @@
       "sha256": "8cf82643cae3d4e2d810ad96e4b26c63f7805abfd9465a2e83b13aed5a07bbf7"
     },
     {
+      "path": "crates/kurosaki-core/tests/oam_dma.rs",
+      "sha256": "bc8eccc9d211c4c244924a11c1f75d7d110c42f291acd86d7a80f58c28ae1372"
+    },
+    {
       "path": "crates/kurosaki-core/tests/smoke.rs",
       "sha256": "385778faa5769e5b88f84cb2d2513af1e0a78ff4248d60f7ac9576223aaacd1d"
+    },
+    {
+      "path": "crates/kurosaki-core/tests/snapshot_float_roundtrip.rs",
+      "sha256": "83188139c5b7a80139a63171a441cf9a31d27da017d0e6d31db227f33999f4af"
     },
     {
       "path": "crates/kurosaki-core/tests/snapshot_rebase.rs",
@@ -163,16 +171,30 @@
     {
       "path": "crates/kurosaki-py/src/lib.rs",
       "sha256": "8701bb52f3a94413f5cbaa5e5d80293777b2a1805dc9708e4b76d20a7e6746e0"
-    },
-    {
-      "path": "scripts/build.ps1",
-      "sha256": "689c70e4d6a128d7b55ed804b146ef1e44b682843d21c0daf15c420b8fbddeac"
     }
   ],
+  "source_inventory_scope": "Public Rust workspace; the CLI dependency closure is built and packaged",
+  "build_command": [
+    "cargo",
+    "build",
+    "--locked",
+    "--release",
+    "-p",
+    "kurosaki-cli",
+    "--bin",
+    "kurosaki"
+  ],
+  "build_exit_code": 0,
+  "target": "x86_64-pc-windows-msvc",
+  "rustflags": "-C target-feature=+crt-static",
+  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+  "cargo_lock_sha256": "0b7e6dda22f25056a6290817f357681c50d8e97d7fdfe726209214221f629fbb",
+  "ci_run": "https://github.com/bartaro/kitaqgb-rust-validation-20261004/actions/runs/37624319393",
+  "validation_commit": "0055cdc3eba618b60710e2e2f3307e6b70b5d1d0",
   "binary": {
     "path": "kurosaki.exe",
-    "bytes": 2513920,
-    "sha256": "972a5c29a9681616e612f91028bb8cca4daf5c2ce0f03e6718fc2160cb38b60d",
+    "bytes": 2547712,
+    "sha256": "0df4e04db24e2918badbf85c345d6910a7adb592a45171798ab6083d6f067fbe",
     "imported_system_dlls": [
       "kernel32.dll",
       "ntdll.dll",
@@ -182,44 +204,81 @@
   },
   "checks": [
     {
-      "check": "Core library tests, including pre-render status clearing and sprite-hit status reads",
-      "cases": 55,
-      "result": "all passed"
+      "name": "toolchain",
+      "arguments": [
+        "rustc",
+        "--version",
+        "--verbose"
+      ],
+      "exit_code": 0,
+      "test_count": 0
     },
     {
-      "check": "CIRAM bus regressions: AxROM and FME7 all 256 register values; MMC5 all 16 CIRAM-only layouts",
-      "cases": 3,
-      "result": "all passed"
+      "name": "tests",
+      "arguments": [
+        "cargo",
+        "test",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--exclude",
+        "kurosaki-py"
+      ],
+      "exit_code": 0,
+      "test_count": 120
     },
     {
-      "check": "Core smoke and SUROM integration regressions",
-      "cases": 35,
-      "result": "all passed"
+      "name": "clippy",
+      "arguments": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-targets",
+        "--exclude",
+        "kurosaki-py",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "test_count": 0
     },
     {
-      "check": "KITAQFC mapper identity, CHR readback, mirroring and IRQ register sequences; default and -O0",
-      "cases": 48,
-      "result": "all passed"
-    },
-    {
-      "check": "Executed mapper lessons, IRQ delivery, observed RAM and displayed labels; default and -O0",
-      "cases": 14,
-      "result": "all passed"
-    },
-    {
-      "check": "Sprite-zero wait and split lessons: default and -O0; full colored-image checks and frame progression",
-      "cases": 6,
-      "result": "all passed"
-    },
-    {
-      "check": "Sprite-zero hit prerequisites, blocking cases and deferred vertical scroll: default and -O0",
-      "cases": 18,
-      "result": "all passed"
+      "name": "release",
+      "arguments": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "kurosaki-cli",
+        "--bin",
+        "kurosaki"
+      ],
+      "exit_code": 0,
+      "test_count": 0
     }
   ],
-  "scope": "Windows CLI release. Compilation and bounded emulator execution are separate checks; no blanket physical-hardware or peripheral compatibility claim.",
-  "target": "x86_64-pc-windows-msvc",
-  "rustflags": "-C target-feature=+crt-static",
-  "cargo_lock_sha256": "0b7e6dda22f25056a6290817f357681c50d8e97d7fdfe726209214221f629fbb",
-  "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8"
+  "native_smoke_checks": [
+    {
+      "case": "cli-help",
+      "passed": true
+    },
+    {
+      "case": "battery-first-boot",
+      "passed": true
+    },
+    {
+      "case": "battery-second-boot",
+      "passed": true
+    },
+    {
+      "case": "snapshot-battery-export",
+      "passed": true
+    }
+  ],
+  "release_fraction_cases": 32,
+  "release_current_pc_classification_verified": true,
+  "scope": "Windows x64 CLI; synthetic tests and native execution only, no physical-hardware claim"
 }
