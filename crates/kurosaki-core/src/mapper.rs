@@ -137,6 +137,9 @@ pub trait Mapper: Send {
     }
     // Leave state unchanged when no mapper interrupt latch is implemented.
     fn clear_irq(&mut self) {}
+    /// Advance CPU-clocked expansion sound before the next output sample (or
+    /// before returning to the CPU for another register access).
+    fn clock_expansion_audio(&mut self, _cpu_cycles: u64) {}
     // Contribute silence unless the board implements expansion audio.
     fn expansion_audio_sample(&mut self, _sample_rate: u32) -> i16 {
         0
@@ -333,11 +336,12 @@ pub fn create_mapper(cart: &Cartridge) -> Result<Box<dyn Mapper>> {
             cart.info.mirroring,
             cart.info.battery,
         ))),
-        19 => Ok(Box::new(Namco163Mapper::new(
+        19 => Ok(Box::new(Namco163Mapper::new_with_submapper(
             cart.prg_rom.clone(),
             cart.chr_rom.clone(),
             cart.info.mirroring,
             cart.info.battery,
+            cart.info.submapper,
         ))),
         20 => {
             // Attach parsed disk data only when present; ordinary mapper-20 input

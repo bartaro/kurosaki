@@ -179,3 +179,11 @@ chmod +x bin/macos-x86_64/kurosaki
 ```
 
 コマンドはリポジトリ直下で実行します。再配布時はLICENSE、LICENSE.ja、BINARY_NOTICES.md、licenses/も保持してください。NATIVE_BINARIES.jsonにハッシュ、依存物、ソースのリビジョン、ネイティブ実行検証の記録があります。
+
+
+## 2026-10-29 update / 更新
+
+N163 audio, NSF/NSFe playback, WAV export, track metadata, and debugger/PPU fixes.
+N163音源、NSF／NSFe、WAV出力、曲長情報、デバッガー・PPU修正を追加しました。
+
+See [update details](docs/UPDATE_20261029.md) and [music commands](docs/N163_NSF.md).

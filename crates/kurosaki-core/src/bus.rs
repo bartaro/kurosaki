@@ -130,7 +130,8 @@ impl Bus {
                 if pattern_read {
                     // The CPU received the previous buffer. Refill it from the
                     // currently selected mapper CHR bank, not PPU local storage.
-                    self.mapper.notify_ppu_addr(pattern_addr, frame, effective_cycle, cfg, sink);
+                    self.mapper
+                        .notify_ppu_addr(pattern_addr, frame, effective_cycle, cfg, sink);
                     self.ppu.data_read_buffer = self.mapper.read_chr(pattern_addr);
                 }
                 value
@@ -284,9 +285,34 @@ impl Bus {
         lo | (hi << 8)
     }
 
-    // Service DMC requests around the APU chunk, then advance PPU and mapper
-    // clocks. PPU fetch callbacks notify the mapper before reading CHR. Pending
-    // NMI/IRQ flags are latched here; an inactive source does not clear the latch.
+    /// Audio-only clock used by NSF hosts, without drawing unused PPU frames.
+    pub fn clock_audio_devices(
+        &mut self,
+        cpu_cycles: u64,
+        frame: u64,
+        cycle: u64,
+        cfg: TraceConfig,
+        sink: &mut TraceSink,
+    ) {
+        self.service_dmc_fetch(frame, cycle, cfg, sink);
+        {
+            let apu = &mut self.apu;
+            let mapper = &mut self.mapper;
+            apu.clock_cpu_cycles_with_timed_expansion(
+                cpu_cycles,
+                frame,
+                cycle,
+                cfg,
+                sink,
+                |cycles, sample_rate| {
+                    mapper.clock_expansion_audio(cycles);
+                    sample_rate.map_or(0, |rate| mapper.expansion_audio_sample(rate))
+                },
+            );
+        }
+        self.service_dmc_fetch(frame, cycle.saturating_add(cpu_cycles), cfg, sink);
+    }
+
     pub fn clock_devices(
         &mut self,
         cpu_cycles: u64,
@@ -297,20 +323,7 @@ impl Bus {
     ) {
         self.ppu
             .set_nametable_mirroring(self.mapper.nametable_mirroring());
-        self.service_dmc_fetch(frame, cycle, cfg, sink);
-        {
-            let apu = &mut self.apu;
-            let mapper = &mut self.mapper;
-            apu.clock_cpu_cycles_with_expansion(
-                cpu_cycles,
-                frame,
-                cycle,
-                cfg,
-                sink,
-                |sample_rate| mapper.expansion_audio_sample(sample_rate),
-            );
-        }
-        self.service_dmc_fetch(frame, cycle.saturating_add(cpu_cycles), cfg, sink);
+        self.clock_audio_devices(cpu_cycles, frame, cycle, cfg, sink);
         {
             let mapper = &mut self.mapper;
             let nmi = self.ppu.clock_cpu_cycles(
@@ -478,9 +491,9 @@ impl Bus {
         value
     }
 
-    // Read 256 bytes through the bus into OAM indices 0..255, suppressing read
-    // traces but retaining read side effects. This model ignores OAM start offset
-    // and CPU parity, adds a fixed 513-cycle stall, and clocks devices immediately.
+    // Read 256 bytes through the bus into OAM starting at OAMADDR and wrapping.
+    // Read side effects remain; CPU parity is approximated by a fixed 513-cycle
+    // stall and devices are clocked immediately.
     fn oam_dma(
         &mut self,
         page: u8,

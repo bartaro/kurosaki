@@ -4,7 +4,8 @@
 //! observation emulator. Phase 0-3 focuses on ROM inspection, official 2A03
 //! opcode coverage, NROM/MMC1/MMC3/FDS mapper scaffolds, PPU A12-driven MMC3
 //! IRQ observation, scanline/pixel-oriented PPU diagnostics, CPU-cycle-clocked
-//! 2A03 audio with DMC playback, FDS/VRC6/VRC7 expansion-audio scaffolds,
+//! 2A03 audio with DMC playback, CPU-clocked N163 wavetable audio,
+//! NSF1 playback, FDS/VRC6/VRC7 expansion-audio scaffolds,
 //! trace/report data models, and Python/CLI-friendly APIs. Phase 0-4 adds a full
 //! NES 2.0 mapper registry, probe-only mapper fallback, mapper support reports,
 //! and CLI mapper-list output.
@@ -27,6 +28,8 @@ pub mod kitaqfc;
 pub mod mapper;
 pub mod mapper_db;
 pub mod mapper_scaffolds;
+pub mod namco163;
+pub mod nsf;
 pub mod ppu;
 pub mod replay;
 pub mod report;

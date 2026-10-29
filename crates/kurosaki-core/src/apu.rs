@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 const CPU_HZ_NTSC: f64 = 1_789_773.0;
 const DEFAULT_SAMPLE_RATE: u32 = 44_100;
+pub(crate) const APU_PCM_SCALE: f64 = 45_000.0;
 const MAX_RECENT_AUDIO_SECONDS: usize = 1;
 const FRAME_4STEP_PERIOD_CPU_CYCLES: f64 = 29_830.0;
 const FRAME_5STEP_PERIOD_CPU_CYCLES: f64 = 37_282.0;
@@ -365,6 +366,30 @@ impl ApuState {
     ) where
         F: FnMut(u32) -> i16,
     {
+        self.clock_cpu_cycles_with_timed_expansion(
+            cpu_cycles,
+            frame,
+            cycle,
+            trace_cfg,
+            sink,
+            |_, rate| rate.map_or(0, &mut expansion_sample),
+        );
+    }
+
+    /// The callback receives all elapsed CPU cycles, split at output sample
+    /// boundaries. `None` advances the tail without requesting a PCM sample.
+    /// This also clocks sound on instructions that produce no output samples.
+    pub fn clock_cpu_cycles_with_timed_expansion<F>(
+        &mut self,
+        cpu_cycles: u64,
+        frame: u64,
+        cycle: u64,
+        trace_cfg: TraceConfig,
+        sink: &mut TraceSink,
+        mut expansion: F,
+    ) where
+        F: FnMut(u64, Option<u32>) -> i16,
+    {
         if cpu_cycles == 0 {
             return;
         }
@@ -375,13 +400,18 @@ impl ApuState {
         // Convert CPU time to sample deadlines. The public rate is used directly;
         // callers should provide a sensible nonzero rate before clocking.
         let cycles_per_sample = CPU_HZ_NTSC / self.sample_rate as f64;
+        let previous_accum = self.sample_clock_accum;
         self.sample_clock_accum += cpu_cycles as f64;
         let mut produced = 0u32;
+        let mut elapsed = 0u64;
         while self.sample_clock_accum >= cycles_per_sample {
             self.sample_clock_accum -= cycles_per_sample;
-            // Invoke the mapper callback once for every emitted sample, after the
-            // base channel state has advanced for this entire input chunk.
-            let exp = expansion_sample(self.sample_rate);
+            let boundary = (((produced as f64 + 1.0) * cycles_per_sample - previous_accum)
+                .ceil()
+                .max(0.0) as u64)
+                .min(cpu_cycles);
+            let exp = expansion(boundary - elapsed, Some(self.sample_rate));
+            elapsed = boundary;
             let sample = self.mix_sample(exp);
             self.sample_buffer.push(sample);
             self.generated_samples += 1;
@@ -393,6 +423,9 @@ impl ApuState {
                 let drain = self.sample_buffer.len() - max_recent;
                 self.sample_buffer.drain(0..drain);
             }
+        }
+        if elapsed < cpu_cycles {
+            expansion(cpu_cycles - elapsed, None);
         }
         if produced > 0 && trace_cfg.apu && self.generated_samples % 2048 < produced as u64 {
             let mut event = TraceEvent::new("apu.samples", frame, cycle);
@@ -695,7 +728,7 @@ impl ApuState {
         } else {
             0.0
         };
-        let mono = (pulse_out + tnd_out) * 45_000.0;
+        let mono = (pulse_out + tnd_out) * APU_PCM_SCALE;
         let nes = self.dc_block(mono);
         let mixed = nes + expansion as f64;
         mixed.clamp(i16::MIN as f64, i16::MAX as f64) as i16
@@ -1076,7 +1109,10 @@ mod tests {
     // 44100. Channels stay unprogrammed, so this checks retention, not sound quality.
     fn offline_capture_keeps_more_than_one_second_without_changing_default() {
         for full in [false, true] {
-            let mut apu = ApuState { capture_full_audio: full, ..ApuState::default() };
+            let mut apu = ApuState {
+                capture_full_audio: full,
+                ..ApuState::default()
+            };
             let mut sink = TraceSink::default();
             for _ in 0..120 {
                 apu.clock_cpu_cycles(29_830, 0, 0, TraceConfig::none(), &mut sink);

@@ -7,7 +7,7 @@ use kurosaki_core::{
     mapper_spec, screen, Cartridge, DiagnosticEvent, Emulator as CoreEmulator, RunOptions,
     TraceConfig,
 };
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::fs;
 use std::io::Write;
@@ -94,6 +94,15 @@ impl Emulator {
             .map_err(to_py_err)
     }
 
+    /// Advance with executed CPU, bus-write, mapper and interrupt observations.
+    /// Existing trace history is retained until clear_trace is explicitly called.
+    /// A stopped CPU does not fabricate a completed frame; inspect frame/stopped.
+    pub fn step_frame_traced(&mut self) -> PyResult<()> {
+        self.inner
+            .step_frame(debugger_trace_config(), true)
+            .map_err(to_py_err)
+    }
+
     // Request one core instruction step with unsupported opcodes converted to
     // a stopped CPU instead of a propagated opcode error.
     pub fn step_instruction(&mut self) -> PyResult<()> {
@@ -147,6 +156,47 @@ impl Emulator {
                 .map_err(to_py_err)?;
         }
         Ok(self.inner.cpu.pc == pc)
+    }
+
+    /// Seek an actual instruction boundary with an explicit physical-bank identity.
+    /// Frame limits are checked between instructions; clocks and input stay native.
+    #[pyo3(signature = (pc, bank, max_instructions, max_frames=None))]
+    pub fn run_until_pc_bank(
+        &mut self,
+        pc: u16,
+        bank: Option<u16>,
+        max_instructions: u64,
+        max_frames: Option<u64>,
+    ) -> PyResult<bool> {
+        if (pc >= 0x8000) != bank.is_some() {
+            return Err(PyValueError::new_err(
+                "ROM PCs require a physical bank; RAM/I/O PCs require None",
+            ));
+        }
+        let deadline = max_frames
+            .map(|frames| {
+                self.inner.frame.checked_add(frames).ok_or_else(|| {
+                    PyValueError::new_err("Frame deadline exceeds the counter domain")
+                })
+            })
+            .transpose()?;
+        for _ in 0..max_instructions {
+            if self.inner.cpu.stopped {
+                return Ok(false);
+            }
+            if self.inner.cpu.pc == pc && self.inner.bus.mapper.physical_prg_bank_8k(pc) == bank {
+                return Ok(true);
+            }
+            if deadline.is_some_and(|end| self.inner.frame >= end) {
+                return Ok(false);
+            }
+            self.inner
+                .step_instruction(TraceConfig::none(), true)
+                .map_err(to_py_err)?;
+        }
+        Ok(!self.inner.cpu.stopped
+            && self.inner.cpu.pc == pc
+            && self.inner.bus.mapper.physical_prg_bank_8k(pc) == bank)
     }
 
     #[pyo3(signature = (pc, max_instructions, clear_trace=true))]
@@ -229,8 +279,7 @@ impl Emulator {
         self.inner.bus.set_controller_state(pad1, pad2.unwrap_or(0));
     }
 
-    // Perform a side-effecting CPU-bus read at the current timestamp without
-    // advancing clocks or requesting memory trace events.
+    /// A guest bus read: I/O acknowledgement and controller shifting are intentional.
     pub fn read_cpu(&mut self, addr: u16) -> u8 {
         self.inner.bus.read(
             addr,
@@ -241,10 +290,22 @@ impl Emulator {
         )
     }
 
-    // Compatibility alias for read_cpu. This is not a side-effect-free debugger
-    // peek: reads of status or controller registers can alter emulated state.
-    pub fn peek_cpu(&mut self, addr: u16) -> u8 {
-        self.read_cpu(addr)
+    /// Observe without changing the original machine, including I/O and counters.
+    /// Non-RAM addresses require a restorable mapper snapshot; failure is explicit.
+    pub fn peek_cpu(&self, addr: u16) -> PyResult<u8> {
+        if addr <= 0x1FFF {
+            return Ok(self.inner.bus.ram[(addr as usize) & 0x07FF]);
+        }
+        let mut observer =
+            CoreEmulator::from_snapshot(self.inner.cartridge.clone(), &self.inner.snapshot())
+                .map_err(to_py_err)?;
+        Ok(observer.bus.read(
+            addr,
+            observer.frame,
+            observer.cpu.cycles,
+            TraceConfig::none(),
+            &mut observer.trace,
+        ))
     }
 
     // Perform a normal CPU-bus write at the current timestamp. Device side
@@ -708,7 +769,7 @@ mod tests {
         let mut emu = Emulator::from_rom(path.to_string_lossy().into_owned(), None).unwrap();
         assert_eq!(emu.pc(), 0x8000);
         emu.step_instructions(2).unwrap();
-        assert_eq!(emu.peek_cpu(0x10), 0x42);
+        assert_eq!(emu.peek_cpu(0x10).unwrap(), 0x42);
         fs::remove_file(path).unwrap();
     }
 
@@ -724,6 +785,113 @@ mod tests {
         assert_eq!(emu.inner.bus.controller_state, [0x89, 0x46]);
         emu.poll_diagnostics(1).unwrap();
         assert_eq!(emu.inner.bus.controller_state, [0x89, 0x46]);
+    }
+
+    fn snapshot_bytes(emulator: &Emulator) -> Vec<u8> {
+        serde_json::to_vec(&emulator.inner.snapshot()).unwrap()
+    }
+
+    #[test]
+    fn peek_cpu_ram_mirrors_do_not_change_the_machine() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        emulator.write_cpu(0x0000, 0x12);
+        emulator.write_cpu(0x07FF, 0xA5);
+        let before = snapshot_bytes(&emulator);
+        for base in [0x0000, 0x0800, 0x1000, 0x1800] {
+            assert_eq!(emulator.peek_cpu(base).unwrap(), 0x12);
+            assert_eq!(emulator.peek_cpu(base + 0x07FF).unwrap(), 0xA5);
+        }
+        assert_eq!(snapshot_bytes(&emulator), before);
+    }
+
+    #[test]
+    fn peek_cpu_both_controllers_does_not_consume_serial_input() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        emulator.set_input(0x05, Some(0x02));
+        emulator.write_cpu(0x4016, 1);
+        emulator.write_cpu(0x4016, 0);
+        let before = snapshot_bytes(&emulator);
+        for _ in 0..8 {
+            assert_eq!(emulator.peek_cpu(0x4016).unwrap(), 0x41);
+            assert_eq!(emulator.peek_cpu(0x4017).unwrap(), 0x40);
+        }
+        assert_eq!(snapshot_bytes(&emulator), before);
+        assert_eq!(emulator.read_cpu(0x4016), 0x41);
+        assert_eq!(emulator.inner.bus.controller_shift[0], 0x82);
+        assert_eq!(emulator.inner.bus.joypad_reads, 1);
+    }
+
+    #[test]
+    fn peek_cpu_ppu_status_does_not_acknowledge_vblank_or_reset_latches() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        emulator.inner.bus.ppu.status = 0xE0;
+        emulator.inner.bus.ppu.addr_latch = true;
+        emulator.inner.bus.ppu.scroll_latch = true;
+        let before = snapshot_bytes(&emulator);
+        for address in [0x2002, 0x200A, 0x3FFA] {
+            assert_eq!(emulator.peek_cpu(address).unwrap(), 0xE0);
+        }
+        assert_eq!(snapshot_bytes(&emulator), before);
+        assert_eq!(emulator.read_cpu(0x2002), 0xE0);
+        assert_eq!(emulator.inner.bus.ppu.status & 0x80, 0);
+        assert!(!emulator.inner.bus.ppu.addr_latch);
+        assert!(!emulator.inner.bus.ppu.scroll_latch);
+        assert_eq!(emulator.inner.bus.ppu.status_reads, 1);
+    }
+
+    #[test]
+    fn peek_cpu_ppu_data_does_not_advance_vram_address() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        emulator.inner.bus.ppu.vram_addr = 0x2000;
+        emulator.inner.bus.ppu.vram[0x2000] = 0x53;
+        let before = snapshot_bytes(&emulator);
+        assert_eq!(emulator.peek_cpu(0x2007).unwrap(), 0x53);
+        assert_eq!(emulator.peek_cpu(0x2007).unwrap(), 0x53);
+        assert_eq!(snapshot_bytes(&emulator), before);
+        assert_eq!(emulator.read_cpu(0x2007), 0x53);
+        assert_eq!(emulator.inner.bus.ppu.vram_addr, 0x2001);
+    }
+
+    #[test]
+    fn peek_cpu_apu_status_does_not_acknowledge_frame_irq() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        emulator.write_cpu(0x4017, 0);
+        emulator.inner.bus.apu.clock_cpu_cycles(
+            29_830,
+            0,
+            0,
+            TraceConfig::none(),
+            &mut emulator.inner.trace,
+        );
+        emulator.inner.bus.irq_pending = true;
+        assert!(emulator.inner.bus.apu.irq_pending());
+        let before = snapshot_bytes(&emulator);
+        assert_eq!(emulator.peek_cpu(0x4015).unwrap() & 0x40, 0x40);
+        assert_eq!(snapshot_bytes(&emulator), before);
+        assert_eq!(emulator.read_cpu(0x4015) & 0x40, 0x40);
+        assert!(!emulator.inner.bus.apu.irq_pending());
+        assert!(!emulator.inner.bus.irq_pending);
+    }
+
+    #[test]
+    fn peek_cpu_prg_uses_the_current_switchable_bank_without_changing_state() {
+        let mut rom = vec![
+            0x4E, 0x45, 0x53, 0x1A, 4, 0, 0x20, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        for bank in 0..4 {
+            rom.extend(vec![bank as u8; 16 * 1024]);
+        }
+        let cart = Cartridge::from_bytes(&rom).unwrap();
+        let mut emulator = Emulator {
+            inner: CoreEmulator::from_cartridge(cart).unwrap(),
+        };
+        emulator.write_cpu(0x8000, 2);
+        let expected = emulator.read_cpu(0x8000);
+        assert_eq!(expected, 2);
+        let before = snapshot_bytes(&emulator);
+        assert_eq!(emulator.peek_cpu(0x8000).unwrap(), expected);
+        assert_eq!(emulator.peek_cpu(0xC000).unwrap(), 3);
+        assert_eq!(snapshot_bytes(&emulator), before);
     }
 
     #[test]
@@ -764,5 +932,121 @@ mod tests {
 
         emulator.clear_trace();
         assert_eq!(emulator.trace_jsonl().unwrap(), "");
+    }
+
+    #[test]
+    fn traced_frame_preserves_machine_execution_and_selected_input() {
+        let program = [0xA9, 0x5A, 0x85, 0x10, 0xE6, 0x10, 0x4C, 0x04, 0x80];
+        let mut plain = synthetic_emulator(&program);
+        let mut traced = synthetic_emulator(&program);
+        for emulator in [&mut plain, &mut traced] {
+            emulator.clear_trace();
+            emulator.set_input(0x89, Some(0x46));
+        }
+        plain.step_frame().unwrap();
+        traced.step_frame_traced().unwrap();
+        assert_eq!(plain.frame(), 1);
+        assert_eq!(traced.frame(), 1);
+        assert_eq!(traced.inner.bus.controller_state, [0x89, 0x46]);
+        let events = traced.trace_jsonl().unwrap();
+        assert!(events.contains("\"kind\":\"cpu.instruction\""));
+        assert!(events.contains("\"kind\":\"mem.write\""));
+        traced.clear_trace();
+        assert_eq!(snapshot_bytes(&plain), snapshot_bytes(&traced));
+    }
+
+    #[test]
+    fn traced_frame_retains_existing_history_and_actual_write_owners() {
+        let mut emulator =
+            synthetic_emulator(&[0xA9, 0x5A, 0x85, 0x10, 0xE6, 0x10, 0x4C, 0x04, 0x80]);
+        let old_history = emulator.trace_jsonl().unwrap();
+        assert!(!old_history.is_empty());
+        emulator.step_frame_traced().unwrap();
+        let trace = emulator.trace_jsonl().unwrap();
+        assert!(trace.starts_with(&old_history));
+        let mut pending = Vec::new();
+        let mut owners = Vec::new();
+        for line in trace.lines() {
+            let event: serde_json::Value = serde_json::from_str(line).unwrap();
+            if event["kind"] == "mem.write" && event["addr"] == 0x10 {
+                pending.push(event);
+            } else if event["kind"] == "cpu.instruction" {
+                for write in pending.drain(..) {
+                    assert_eq!(write["pc"], event["pc"]);
+                    assert_eq!(write["prg_bank"], event["prg_bank"]);
+                    owners.push(event["opcode"].as_u64().unwrap());
+                }
+            }
+        }
+        assert!(pending.is_empty());
+        assert!(owners.contains(&0x85));
+        assert!(owners.contains(&0xE6));
+    }
+
+    #[test]
+    fn traced_frame_does_not_fabricate_progress_when_cpu_is_stopped() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        emulator.inner.cpu.stopped = true;
+        let before = snapshot_bytes(&emulator);
+        emulator.step_frame_traced().unwrap();
+        assert_eq!(emulator.frame(), 0);
+        assert_eq!(snapshot_bytes(&emulator), before);
+    }
+
+    #[test]
+    fn bank_qualified_seek_does_not_accept_a_same_pc_alias() {
+        let mut plain = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        let mut seeking = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        plain.step_frame().unwrap();
+        assert!(!seeking
+            .run_until_pc_bank(0x8000, Some(1), 100_000, Some(1))
+            .unwrap());
+        assert_eq!(seeking.frame(), 1);
+        assert_eq!(snapshot_bytes(&plain), snapshot_bytes(&seeking));
+    }
+
+    #[test]
+    fn bank_qualified_seek_can_match_without_advancing() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        let before = snapshot_bytes(&emulator);
+        assert!(emulator
+            .run_until_pc_bank(0x8000, Some(0), 0, Some(0))
+            .unwrap());
+        assert_eq!(snapshot_bytes(&emulator), before);
+    }
+
+    #[test]
+    fn bank_qualified_seek_rejects_invalid_identity_before_running() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        let before = snapshot_bytes(&emulator);
+        assert!(emulator
+            .run_until_pc_bank(0x8000, None, 8, Some(1))
+            .is_err());
+        assert!(emulator
+            .run_until_pc_bank(0x0010, Some(0), 8, Some(1))
+            .is_err());
+        assert_eq!(snapshot_bytes(&emulator), before);
+    }
+
+    #[test]
+    fn bank_qualified_seek_does_not_accept_a_stopped_pc() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x00, 0x80]);
+        emulator.inner.cpu.stopped = true;
+        let before = snapshot_bytes(&emulator);
+        assert!(!emulator
+            .run_until_pc_bank(0x8000, Some(0), 8, Some(1))
+            .unwrap());
+        assert_eq!(snapshot_bytes(&emulator), before);
+    }
+
+    #[test]
+    fn bank_qualified_seek_supports_explicit_ram_code_identity() {
+        let mut emulator = synthetic_emulator(&[0x4C, 0x10, 0x00]);
+        emulator.write_cpu(0x0010, 0xEA);
+        assert!(emulator
+            .run_until_pc_bank(0x0010, None, 8, Some(1))
+            .unwrap());
+        assert_eq!(emulator.pc(), 0x0010);
+        assert_eq!(emulator.frame(), 0);
     }
 }

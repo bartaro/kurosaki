@@ -6,6 +6,8 @@ pub type Result<T> = std::result::Result<T, KurosakiError>;
 // Typed failures distinguish malformed input, unsupported hardware, stopped CPU
 // execution and persistence errors. I/O and JSON errors retain their original causes.
 pub enum KurosakiError {
+    #[error("NSF: {0}")]
+    Nsf(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 

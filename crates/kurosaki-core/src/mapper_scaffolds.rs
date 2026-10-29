@@ -650,6 +650,8 @@ struct Vrc7Patch {
     feedback: f64,
     mod_index: f64,
     brightness: f64,
+    mod_key_level: u8,
+    car_key_level: u8,
 }
 
 impl Vrc7Patch {
@@ -670,6 +672,8 @@ impl Vrc7Patch {
             feedback,
             mod_index,
             brightness,
+            mod_key_level: regs[2] >> 6,
+            car_key_level: regs[3] >> 6,
         }
     }
 }
@@ -944,7 +948,17 @@ impl Vrc7ChannelState {
         self.feedback_1 = modulator;
         self.mod_slot.last_output = modulator;
 
-        let phase_mod = modulator * patch.mod_index * mod_env;
+        // Pitch-dependent attenuation: VRC7 KSL 0/1/2/3 selects
+        // 0/1.5/3/6 dB per octave. Match the continuous pitch approximation
+        // used by this core rather than silently discarding the KSL fields.
+        let key_level_gain = |level: u8| {
+            let db = (6.0 * (block as f64 + (self.fnum() as f64 / 512.0).log2())).max(0.0);
+            let scale = [0.0, 0.25, 0.5, 1.0][level as usize];
+            10.0_f64.powf(-db * scale / 20.0)
+        };
+        let mod_key_gain = key_level_gain(patch.mod_key_level);
+        let car_key_gain = key_level_gain(patch.car_key_level);
+        let phase_mod = modulator * patch.mod_index * mod_env * mod_key_gain;
         self.car_slot
             .advance_phase(hz, patch.car_slot, sample_rate, lfo_vib);
         let carrier = vrc7_wave(
@@ -956,7 +970,7 @@ impl Vrc7ChannelState {
         // Treat each volume step as two decibels of attenuation; the maximum
         // register value attenuates rather than mathematically muting the channel.
         let volume_gain = 10.0_f64.powf(-(self.volume as f64 * 2.0) / 20.0);
-        carrier * car_env * volume_gain * patch.brightness
+        carrier * car_env * volume_gain * patch.brightness * car_key_gain
     }
 
     // Append frequency/key/patch fields, envelopes, envelope phases and
@@ -1673,289 +1687,7 @@ impl Mapper for VrcFamilyMapper {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Namco163Mapper {
-    prg_rom: Vec<u8>,
-    prg_ram: Vec<u8>,
-    chr: Vec<u8>,
-    chr_ram: bool,
-    mirroring: Mirroring,
-    battery: bool,
-    prg_regs: [u8; 3],
-    chr_regs: [u8; 8],
-    internal_ram: [u8; 128],
-    ram_addr: u8,
-    ram_auto_inc: bool,
-    irq_counter: u16,
-    irq_enabled: bool,
-    irq_pending_flag: bool,
-    audio_writes: u64,
-}
-
-impl Namco163Mapper {
-    // Allocate work RAM, CHR and 128-byte internal register/wave RAM, select
-    // initial PRG banks 0/1/2 and clear the IRQ and indirect-port state.
-    pub fn new(prg_rom: Vec<u8>, chr_rom: Vec<u8>, mirroring: Mirroring, battery: bool) -> Self {
-        let (chr, chr_ram) = ensure_chr(chr_rom);
-        Self {
-            prg_rom,
-            prg_ram: vec![0; 8 * 1024],
-            chr,
-            chr_ram,
-            mirroring,
-            battery,
-            prg_regs: [0, 1, 2],
-            chr_regs: [0; 8],
-            internal_ram: [0; 128],
-            ram_addr: 0,
-            ram_auto_inc: false,
-            irq_counter: 0,
-            irq_enabled: false,
-            irq_pending_flag: false,
-            audio_writes: 0,
-        }
-    }
-    // Wrap the three writable 8 KiB PRG selectors and keep the final ROM
-    // bank fixed in the fourth slot.
-    fn prg_windows(&self) -> [usize; 4] {
-        let count = bank_count(self.prg_rom.len(), 8 * 1024);
-        [
-            self.prg_regs[0] as usize % count,
-            self.prg_regs[1] as usize % count,
-            self.prg_regs[2] as usize % count,
-            count.saturating_sub(1),
-        ]
-    }
-}
-
-impl Mapper for Namco163Mapper {
-    // Identify the Namco 163 scaffold as mapper 19.
-    fn mapper_id(&self) -> u16 {
-        19
-    }
-    // Return the Namco-specific scaffold label.
-    fn mapper_name(&self) -> &'static str {
-        "Namco 163 scaffold"
-    }
-    // Resolve a CPU ROM address through the selected 8 KiB PRG slot, with
-    // no physical cartridge-ROM label for RAM or register addresses.
-    fn physical_prg_bank_8k(&self, addr: u16) -> Option<u16> {
-        if !(0x8000..=0xFFFF).contains(&addr) {
-            return None;
-        }
-        let slot = ((addr - 0x8000) / 0x2000) as usize;
-        physical_bank_8k(
-            self.prg_rom.len(),
-            8 * 1024,
-            self.prg_windows()[slot],
-            addr as usize & 0x1FFF,
-        )
-    }
-    // Read indirect internal RAM at $4800 with optional seven-bit pointer
-    // increment, expose counter bytes at $5000/$5800, or read work RAM/PRG
-    // windows. Register reads do not acknowledge pending IRQ here.
-    fn read_prg(
-        &mut self,
-        addr: u16,
-        frame: u64,
-        cycle: u64,
-        cfg: TraceConfig,
-        sink: &mut TraceSink,
-    ) -> u8 {
-        let value = match addr {
-            0x4800 => {
-                let v = self.internal_ram[(self.ram_addr & 0x7F) as usize];
-                if self.ram_auto_inc {
-                    self.ram_addr = self.ram_addr.wrapping_add(1) & 0x7F;
-                }
-                v
-            }
-            0x5000 => (self.irq_counter & 0xFF) as u8,
-            0x5800 => ((self.irq_counter >> 8) as u8) | if self.irq_enabled { 0x80 } else { 0x00 },
-            0x6000..=0x7FFF => self.prg_ram[(addr as usize - 0x6000) % self.prg_ram.len()],
-            0x8000..=0x9FFF => read_bank(
-                &self.prg_rom,
-                8 * 1024,
-                self.prg_windows()[0],
-                addr as usize - 0x8000,
-            ),
-            0xA000..=0xBFFF => read_bank(
-                &self.prg_rom,
-                8 * 1024,
-                self.prg_windows()[1],
-                addr as usize - 0xA000,
-            ),
-            0xC000..=0xDFFF => read_bank(
-                &self.prg_rom,
-                8 * 1024,
-                self.prg_windows()[2],
-                addr as usize - 0xC000,
-            ),
-            0xE000..=0xFFFF => read_bank(
-                &self.prg_rom,
-                8 * 1024,
-                self.prg_windows()[3],
-                addr as usize - 0xE000,
-            ),
-            _ => 0,
-        };
-        if cfg.mapper && (0x4800..=0x5FFF).contains(&addr) {
-            let mut event = TraceEvent::new("mapper.n163_read", frame, cycle);
-            event.addr = Some(addr);
-            event.value = Some(value);
-            sink.push(event);
-        }
-        value
-    }
-    // Store internal RAM and IRQ fields or select banks through the modeled
-    // address ranges. $E000-$E7FF selects the RAM pointer; $F800+ only selects
-    // auto-increment. Internal RAM writes are counted as audio observations.
-    fn write_prg(
-        &mut self,
-        addr: u16,
-        value: u8,
-        frame: u64,
-        cycle: u64,
-        cfg: TraceConfig,
-        sink: &mut TraceSink,
-    ) {
-        match addr {
-            0x4800 => {
-                self.internal_ram[(self.ram_addr & 0x7F) as usize] = value;
-                self.audio_writes = self.audio_writes.saturating_add(1);
-                if self.ram_auto_inc {
-                    self.ram_addr = self.ram_addr.wrapping_add(1) & 0x7F;
-                }
-            }
-            0x5000 => self.irq_counter = (self.irq_counter & 0x7F00) | value as u16,
-            0x5800 => {
-                self.irq_counter = (self.irq_counter & 0x00FF) | (((value & 0x7F) as u16) << 8);
-                self.irq_enabled = value & 0x80 != 0;
-                if !self.irq_enabled {
-                    self.irq_pending_flag = false;
-                }
-            }
-            0x6000..=0x7FFF => {
-                let idx = (addr as usize - 0x6000) % self.prg_ram.len();
-                self.prg_ram[idx] = value;
-            }
-            0x8000..=0xBFFF => self.chr_regs[((addr - 0x8000) / 0x0800) as usize] = value,
-            // Four address groups wrap across three PRG registers in this scaffold;
-            // the fourth group therefore aliases register zero.
-            0xC000..=0xDFFF => self.prg_regs[((addr - 0xC000) / 0x0800) as usize % 3] = value,
-            0xE000..=0xE7FF => self.ram_addr = value & 0x7F,
-            0xF800..=0xFFFF => self.ram_auto_inc = value & 0x80 != 0,
-            _ => {}
-        }
-        trace_mapper_write(
-            if addr == 0x4800 {
-                "mapper.expansion_audio_write"
-            } else {
-                "mapper.n163_write"
-            },
-            addr,
-            value,
-            frame,
-            cycle,
-            cfg,
-            sink,
-            format!(
-                "Namco 163 write; PRG {:?}; IRQ={} enabled={} audio_writes={}",
-                self.prg_windows(),
-                self.irq_counter,
-                self.irq_enabled,
-                self.audio_writes
-            ),
-        );
-    }
-    // Read a wrapped 1 KiB CHR bank selected by the address's register slot.
-    fn read_chr(&mut self, addr: u16) -> u8 {
-        read_bank(
-            &self.chr,
-            1024,
-            self.chr_regs[((addr as usize) / 1024) & 7] as usize,
-            addr as usize & 0x03FF,
-        )
-    }
-    // Write through the matching 1 KiB bank selection only for CHR RAM.
-    fn write_chr(&mut self, addr: u16, value: u8) {
-        if self.chr_ram {
-            let slot = ((addr as usize) / 1024) & 7;
-            let bank = self.chr_regs[slot] as usize;
-            write_bank(&mut self.chr, 1024, bank, addr as usize & 0x03FF, value);
-        }
-    }
-    // Add the CPU-cycle chunk, latch IRQ when the sum reaches $8000 and retain
-    // the low 15 bits. The chunk is narrowed to u16; this is not a general
-    // arbitrary-u64 elapsed-time update.
-    fn clock_cpu(
-        &mut self,
-        cpu_cycles: u64,
-        frame: u64,
-        cycle: u64,
-        cfg: TraceConfig,
-        sink: &mut TraceSink,
-    ) {
-        if self.irq_enabled {
-            let next = self.irq_counter.saturating_add(cpu_cycles as u16);
-            self.irq_counter = next & 0x7FFF;
-            if next >= 0x8000 {
-                self.irq_pending_flag = true;
-                if cfg.mapper || cfg.nmi {
-                    let mut event = TraceEvent::new("mapper.n163_irq", frame, cycle);
-                    event.message = Some("Namco 163 IRQ pending".to_string());
-                    sink.push(event);
-                }
-            }
-        }
-    }
-    // Expose the pending mapper interrupt latch.
-    fn irq_pending(&self) -> bool {
-        self.irq_pending_flag
-    }
-    // Clear the pending latch without changing enable or counter state.
-    fn clear_irq(&mut self) {
-        self.irq_pending_flag = false;
-    }
-    // Report bank registers, diagnostic metadata and pending IRQ. The
-    // mirroring string does not override the trait's four-screen runtime policy.
-    fn debug_state(&self) -> MapperDebugState {
-        mapper_debug_state(
-            19,
-            format!(
-                "Namco 163 scaffold audio_writes={} battery={}",
-                self.audio_writes, self.battery
-            ),
-            false,
-            self.prg_windows().iter().map(|b| *b as u16).collect(),
-            self.chr_regs.iter().map(|v| *v as u16).collect(),
-            mirroring_name(self.mirroring),
-            self.irq_pending(),
-        )
-    }
-    // Append port/IRQ fields, audio-write count, bank registers, internal/work
-    // RAM and writable CHR. Audio synthesis, battery-RAM exposure and private
-    // restore are not overridden by this scaffold.
-    fn snapshot_bytes(&self) -> Vec<u8> {
-        let mut v = vec![
-            self.ram_addr,
-            self.ram_auto_inc as u8,
-            self.irq_enabled as u8,
-            self.irq_pending_flag as u8,
-            self.battery as u8,
-        ];
-        v.extend_from_slice(&self.irq_counter.to_le_bytes());
-        v.extend_from_slice(&self.audio_writes.to_le_bytes());
-        v.extend_from_slice(&self.prg_regs);
-        v.extend_from_slice(&self.chr_regs);
-        v.extend_from_slice(&self.internal_ram);
-        v.extend_from_slice(&self.prg_ram);
-        if self.chr_ram {
-            v.extend_from_slice(&self.chr);
-        }
-        v
-    }
-}
+pub use crate::namco163::Namco163Mapper;
 
 #[derive(Debug, Clone)]
 pub struct Sunsoft5bMapper {

@@ -97,6 +97,20 @@ pub fn screen_rgb_from_ppu(ppu: &PpuState) -> Vec<u8> {
     rgb
 }
 
+/// Convert the current frame directly into a reusable RGBA display buffer.
+/// The 64-color lookup applies the same grayscale/emphasis rules as PNG export.
+pub fn screen_rgba_from_ppu_into(ppu: &PpuState, rgba: &mut [u8]) {
+    assert_eq!(rgba.len(), NES_WIDTH * NES_HEIGHT * 4);
+    assert_eq!(ppu.frame_buffer.len(), NES_WIDTH * NES_HEIGHT);
+    let palette: [[u8; 4]; 64] = std::array::from_fn(|index| {
+        let [r, g, b] = nes_rgb(ppu, index as u8);
+        [r, g, b, 255]
+    });
+    for (pixel, output) in ppu.frame_buffer.iter().zip(rgba.chunks_exact_mut(4)) {
+        output.copy_from_slice(&palette[(pixel & 0x3f) as usize]);
+    }
+}
+
 // Map each stored palette index through the current PPU mask and RGB table.
 // The caller must provide the complete fixed-size source and destination buffers.
 fn draw_frame_buffer(ppu: &PpuState, rgb: &mut [u8]) {
@@ -232,4 +246,29 @@ fn crc32(data: &[u8]) -> u32 {
     }
 
     !crc
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn direct_rgba_matches_export_for_every_color_and_emphasis_mask() {
+        let mut ppu = PpuState::default();
+        for (i, pixel) in ppu.frame_buffer.iter_mut().enumerate() {
+            *pixel = i as u8;
+        }
+        let mut rgba = vec![0; NES_WIDTH * NES_HEIGHT * 4];
+        for emphasis in 0..8 {
+            for grayscale in 0..2 {
+                ppu.mask = (emphasis << 5) | grayscale;
+                let rgb = screen_rgb_from_ppu(&ppu);
+                screen_rgba_from_ppu_into(&ppu, &mut rgba);
+                for (actual, expected) in rgba.chunks_exact(4).zip(rgb.chunks_exact(3)) {
+                    assert_eq!(&actual[..3], expected, "mask={}", ppu.mask);
+                    assert_eq!(actual[3], 255);
+                }
+            }
+        }
+    }
 }

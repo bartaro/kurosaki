@@ -279,6 +279,7 @@ impl Emulator {
         trace_cfg: TraceConfig,
         allow_unimplemented: bool,
     ) -> Result<()> {
+        let ppu_frame_start = self.bus.ppu.rendered_frames;
         *self.pc_counts.entry(self.cpu.pc).or_insert(0) += 1;
         match self
             .cpu
@@ -293,6 +294,12 @@ impl Emulator {
                     trace_cfg,
                     &mut self.trace,
                 );
+                // Instruction stepping and frame stepping share one clock.
+                // Count actual PPU boundaries, including those crossed by DMA,
+                // rather than incrementing only in the frame-step wrapper.
+                self.frame = self
+                    .frame
+                    .wrapping_add(self.bus.ppu.rendered_frames.wrapping_sub(ppu_frame_start));
                 Ok(())
             }
             Err(KurosakiError::UnimplementedOpcode { opcode, pc }) if allow_unimplemented => {
@@ -312,11 +319,9 @@ impl Emulator {
     }
 
     // Execute until the PPU completes a frame, the CPU stops, or the bounded cycle
-    // budget is reached. The software frame counter advances even after an early break.
+    // budget is reached. Instruction stepping counts only completed PPU frames.
     pub fn step_frame(&mut self, trace_cfg: TraceConfig, allow_unimplemented: bool) -> Result<()> {
-        // The cycle budget is checked between instructions. Reaching the budget
-        // or finding a stopped CPU still proceeds to the software frame increment;
-        // a propagated instruction error exits before that increment.
+        // Early stops preserve the count of actually completed PPU frames.
         let frame_start = self.cpu.cycles;
         let ppu_frame_start = self.bus.ppu.rendered_frames;
         while self.bus.ppu.rendered_frames == ppu_frame_start {
@@ -328,7 +333,6 @@ impl Emulator {
             }
             self.step_instruction(trace_cfg, allow_unimplemented)?;
         }
-        self.frame += 1;
         Ok(())
     }
 

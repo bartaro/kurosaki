@@ -136,6 +136,46 @@ fn parse_cpu_ram_patch_spec(value: &str) -> std::result::Result<CpuRamPatchSpec,
 // Public command argument shapes and defaults. Plain comments here do
 // not alter Clap help output or option names.
 enum Commands {
+    /// Inspect NSF1/NSFe music and track lengths (NTSC, including N163).
+    NsfInfo {
+        nsf: PathBuf,
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
+    /// Execute NSF/NSFe and export WAV; defaults to the declared track length.
+    NsfExport {
+        nsf: PathBuf,
+        /// One-based song number; defaults to the NSF starting song.
+        #[arg(long)]
+        song: Option<u8>,
+        #[arg(long)]
+        seconds: Option<f64>,
+        #[arg(long, default_value_t = 44100)]
+        sample_rate: u32,
+        #[arg(long)]
+        wav: PathBuf,
+        #[arg(long)]
+        json: Option<PathBuf>,
+        /// Optional APU/expansion register trace in JSONL format.
+        #[arg(long)]
+        trace_out: Option<PathBuf>,
+    },
+    /// Convert NSF/NSFe to NSFe, preserving the music, banks and track lengths.
+    NsfeExport {
+        nsf: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Optional one-based track whose length is to be set.
+        #[arg(long)]
+        song: Option<u8>,
+        /// Override the selected track's length (otherwise preserve metadata).
+        #[arg(long)]
+        seconds: Option<f64>,
+        #[arg(long, default_value_t = 0.0)]
+        fade_seconds: f64,
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
     /// Export raw battery RAM from a matching snapshot (not a snapshot file).
     BatteryExport {
         rom: PathBuf,
@@ -637,6 +677,53 @@ fn main() -> Result<()> {
 fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Commands::NsfInfo { nsf, json } => {
+            let file = read_nsf(&nsf)?;
+            write_json_or_stdout(&file.header, json)
+        }
+        Commands::NsfExport {
+            nsf,
+            song,
+            seconds,
+            sample_rate,
+            wav,
+            json,
+            trace_out,
+        } => nsf_export(nsf, song, seconds, sample_rate, wav, json, trace_out),
+        Commands::NsfeExport {
+            nsf,
+            out,
+            song,
+            seconds,
+            fade_seconds,
+            json,
+        } => {
+            let mut file = read_nsf(&nsf)?;
+            let selected = song.unwrap_or(file.header.starting_song);
+            if selected == 0 || selected > file.header.songs {
+                bail!("song is out of range");
+            }
+            if let Some(seconds) = seconds {
+                if !seconds.is_finite()
+                    || seconds <= 0.0
+                    || seconds > 600.0
+                    || !fade_seconds.is_finite()
+                    || !(0.0..=60.0).contains(&fade_seconds)
+                {
+                    bail!("seconds must be in 0..600 (exclusive zero), fade-seconds in 0..60");
+                }
+                let track = &mut file.header.tracks[selected as usize - 1];
+                track.time_ms = Some((seconds * 1000.0).round() as u32);
+                track.fade_ms = Some((fade_seconds * 1000.0).round() as u32);
+            }
+            let data = file.to_nsfe_bytes()?;
+            fs::write(&out, &data)?;
+            write_json_or_stdout(
+                &serde_json::json!({"format":"nsfe","source":nsf,"out":out,
+                "bytes":data.len(),"tracks":file.header.tracks}),
+                json,
+            )
+        }
         Commands::BatteryExport { rom, snapshot, out } => {
             let cart = Cartridge::load_file(rom)?;
             let snapshot: Snapshot = serde_json::from_str(&fs::read_to_string(snapshot)?)?;
@@ -1281,6 +1368,71 @@ fn trace_rom(
     Ok(())
 }
 
+fn read_nsf(path: &Path) -> Result<kurosaki_core::nsf::NsfFile> {
+    if fs::metadata(path)?.len() > kurosaki_core::nsf::MAX_NSF_BYTES as u64 {
+        bail!("NSF exceeds the 1 MiB music data limit");
+    }
+    Ok(kurosaki_core::nsf::NsfFile::from_bytes(&fs::read(path)?)?)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nsf_export(
+    nsf: PathBuf,
+    song: Option<u8>,
+    seconds: Option<f64>,
+    sample_rate: u32,
+    wav: PathBuf,
+    json: Option<PathBuf>,
+    trace_out: Option<PathBuf>,
+) -> Result<()> {
+    let file = read_nsf(&nsf)?;
+    let selected = song.unwrap_or(file.header.starting_song);
+    let seconds = seconds.unwrap_or_else(|| {
+        file.header
+            .duration_ms(selected)
+            .map_or(30.0, |ms| ms as f64 / 1000.0)
+    });
+    if !seconds.is_finite() || seconds <= 0.0 || seconds > 600.0 {
+        bail!("--seconds must be greater than zero and at most 600");
+    }
+    let cfg = if trace_out.is_some() {
+        TraceConfig {
+            apu: true,
+            mapper: true,
+            dma: true,
+            ..TraceConfig::none()
+        }
+    } else {
+        TraceConfig::none()
+    };
+    let mut player = kurosaki_core::nsf::NsfPlayer::new(&file, song, sample_rate, cfg)?;
+    let count = (seconds * sample_rate as f64).round() as usize;
+    if count == 0 {
+        bail!("requested duration is shorter than one sample");
+    }
+    let samples = player.render_samples(count)?;
+    write_wav_pcm16_mono(&wav, sample_rate, &samples)?;
+    if let Some(path) = trace_out.as_ref() {
+        fs::write(path, player.trace.to_jsonl()?)?;
+    }
+    let pcm: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    let peak = samples
+        .iter()
+        .map(|v| i32::from(*v).abs())
+        .max()
+        .unwrap_or(0);
+    write_json_or_stdout(
+        &serde_json::json!({
+            "format": "kurosaki-nsf-export-v1", "nsf": nsf, "header": file.header,
+            "song": player.song, "sample_rate": sample_rate, "samples": samples.len(),
+            "seconds": samples.len() as f64 / sample_rate as f64, "play_calls": player.play_calls,
+            "cpu_cycles": player.cpu_cycles(), "dmc_sample_fetches": player.dmc_sample_fetches(),
+            "peak": peak, "pcm_sha256": sha256_hex(&pcm), "wav": wav, "trace": trace_out,
+        }),
+        json,
+    )
+}
+
 #[derive(Debug, Serialize)]
 // Audio capture metadata from the resulting run; stopped/stop-reason fields
 // are not included in this export-specific report.
@@ -1295,6 +1447,7 @@ struct AudioExportReport {
     dmc_dma_stall_cycles: u64,
     wav: PathBuf,
     final_state_hash: String,
+    mapper: kurosaki_core::mapper::MapperDebugState,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1332,6 +1485,12 @@ fn audio_export(
         pad2,
         replay_frames: Vec::new(),
     });
+    if summary.stopped {
+        bail!(
+            "audio export stopped: {}",
+            summary.stop_reason.as_deref().unwrap_or("CPU stopped")
+        );
+    }
     write_wav_pcm16_mono(&wav, emu.bus.apu.sample_rate, &emu.bus.apu.sample_buffer)
         .with_context(|| format!("failed to write WAV {}", wav.display()))?;
     let report_obj = AudioExportReport {
@@ -1345,6 +1504,7 @@ fn audio_export(
         dmc_dma_stall_cycles: emu.bus.apu.dmc_dma_stall_cycles,
         wav,
         final_state_hash: summary.final_state_hash,
+        mapper: summary.mapper,
     };
     write_json_or_stdout(&report_obj, json)
 }

@@ -141,8 +141,8 @@ impl PpuState {
 
     // Read status/OAM/data through reg & 7 and trace the canonical register.
     // Status reads clear vblank and both write toggles; data reads increment v.
-    // PPUDATA reads are immediate local-VRAM reads here, with no delayed read
-    // buffer or mapper CHR callback.
+    // PPUDATA uses the delayed buffer; the bus refills mapped CHR separately.
+    // Palette reads bypass the delay and refill from the underlying nametable.
     pub fn read_register_timed(
         &mut self,
         reg: u16,
@@ -360,20 +360,21 @@ impl PpuState {
         // chunk uses the caller's frame/cycle label rather than a per-fetch clock.
         let mut ppu_ticks = cpu_cycles.saturating_mul(3);
         while ppu_ticks > 0 {
-            // Split the pre-render line at dot 1 so status flags clear even
-            // with rendering disabled. Polling sprite zero needs this edge
-            // every frame, independently of the scanline renderer below.
-            let next_dot = if self.scanline == SCANLINES_PER_NTSC_FRAME - 1 && self.dot == 0 {
+            // Rendering-event flags clear at pre-render dot 1, including when
+            // both rendering layers are disabled. Split a CPU-cycle chunk at
+            // that event instead of waiting for the next scanline boundary.
+            let clear_render_flags = self.scanline == SCANLINES_PER_NTSC_FRAME - 1 && self.dot == 0;
+            let remaining_in_line = if clear_render_flags {
                 1
             } else {
-                DOTS_PER_SCANLINE
+                (DOTS_PER_SCANLINE - self.dot) as u64
             };
-            let remaining_in_line = (next_dot - self.dot) as u64;
             let step = ppu_ticks.min(remaining_in_line);
             self.dot += step as u16;
             ppu_ticks -= step;
-            if self.scanline == SCANLINES_PER_NTSC_FRAME - 1 && self.dot == 1 {
-                self.end_vblank();
+            if clear_render_flags && self.dot == 1 {
+                self.status &= !0xE0;
+                self.suppress_next_vblank_status = false;
             }
             if self.dot >= DOTS_PER_SCANLINE {
                 self.dot = 0;
@@ -664,7 +665,8 @@ impl PpuState {
         F: FnMut(u16, u64, u64, TraceConfig, &mut TraceSink) -> u8,
     {
         // Sprite evaluation selects the FIRST eight OAM entries on this line.
-        // Draw those in reverse so lower OAM indices retain pixel priority.
+        // Pattern fetches follow OAM order. The first opaque sprite owns a
+        // pixel BEFORE its front/back priority is compared to the background.
         let mut selected = [0usize; 8];
         let mut count = 0;
         for i in 0..64usize {
@@ -677,7 +679,8 @@ impl PpuState {
                 }
             }
         }
-        for &sprite_index in selected[..count].iter().rev() {
+        let mut sprite_opaque = [false; NES_WIDTH];
+        for &sprite_index in &selected[..count] {
             let base = sprite_index * 4;
             let y0 = self.oam[base] as i16 + 1;
             let mut row = y as i16 - y0;
@@ -722,6 +725,11 @@ impl PpuState {
                     self.status |= 0x40;
                     self.sprite0_hit_candidates += 1;
                 }
+
+                if sprite_opaque[x] {
+                    continue;
+                }
+                sprite_opaque[x] = true;
 
                 let behind_background = attr & 0x20 != 0;
                 // Skip this sprite pixel when the background is opaque. Because sprites
@@ -852,6 +860,95 @@ mod tests {
     use crate::mapper::NametableMirroring;
     use crate::trace::{TraceConfig, TraceSink};
 
+    fn sprite_mux_fixture() -> PpuState {
+        let mut ppu = PpuState {
+            mask: 0x1E,
+            ..PpuState::default()
+        };
+        ppu.oam.fill(0xF8);
+        ppu.palette[1] = 0x11;
+        ppu.palette[0x11] = 0x21;
+        ppu.palette[0x15] = 0x31;
+        ppu.oam[..8].copy_from_slice(&[9, 1, 0x20, 16, 9, 2, 1, 16]);
+        ppu
+    }
+
+    #[test]
+    fn sprite_mux_lowest_opaque_sprite_wins_before_background_priority() {
+        let mut ppu = sprite_mux_fixture();
+        let mut sink = TraceSink::default();
+        let mut pattern = |address: u16, _: u64, _: u64, _: TraceConfig, _: &mut TraceSink| {
+            if address & 15 < 8 {
+                0xFF
+            } else {
+                0
+            }
+        };
+        ppu.render_scanline(10, 0, 0, TraceConfig::none(), &mut sink, &mut pattern);
+        // The lower-index back sprite claims this pixel, so an opaque
+        // background hides BOTH sprites, including the later front sprite.
+        assert_eq!(ppu.frame_buffer[10 * 256 + 16], 0x11);
+        assert_ne!(ppu.status & 0x40, 0);
+    }
+
+    #[test]
+    fn sprite_mux_transparent_lower_sprite_allows_later_front_sprite() {
+        let mut ppu = sprite_mux_fixture();
+        let mut sink = TraceSink::default();
+        let mut pattern = |address: u16, _: u64, _: u64, _: TraceConfig, _: &mut TraceSink| {
+            if (0x10..0x20).contains(&address) || address & 15 >= 8 {
+                0
+            } else {
+                0xFF
+            }
+        };
+        ppu.render_scanline(10, 0, 0, TraceConfig::none(), &mut sink, &mut pattern);
+        assert_eq!(ppu.frame_buffer[10 * 256 + 16], 0x31);
+        assert_eq!(ppu.status & 0x40, 0);
+    }
+
+    #[test]
+    fn sprite_mux_fetches_selected_patterns_in_oam_order() {
+        let mut ppu = sprite_mux_fixture();
+        let mut sink = TraceSink::default();
+        let mut reads = vec![];
+        ppu.render_sprites_on_scanline(
+            10,
+            0,
+            8,
+            true,
+            &[true; super::NES_WIDTH],
+            0,
+            0,
+            TraceConfig::none(),
+            &mut sink,
+            &mut |address, _, _, _, _| {
+                reads.push(address);
+                0
+            },
+        );
+        assert_eq!(reads, [0x10, 0x18, 0x20, 0x28]);
+    }
+
+    #[test]
+    fn prerender_clears_render_event_flags_at_dot_one_even_when_disabled() {
+        for mask in [0, 0x1E] {
+            let mut ppu = PpuState {
+                scanline: 261,
+                dot: 0,
+                status: 0xFF,
+                mask,
+                ..PpuState::default()
+            };
+            let mut sink = TraceSink::default();
+            ppu.clock_cpu_cycles(1, 0, 0, TraceConfig::none(), &mut sink, |_, _, _, _, _| 0);
+            assert_eq!(ppu.scanline, 261);
+            assert_eq!(ppu.dot, 3);
+            assert_eq!(ppu.status, 0x1F);
+            assert_eq!(ppu.rendered_frames, 0);
+        }
+    }
+
     #[test]
     fn pre_render_dot_one_clears_all_three_status_flags_with_or_without_rendering() {
         for mask in [0, 0x18] {
@@ -878,10 +975,19 @@ mod tests {
 
     #[test]
     fn status_reads_do_not_acknowledge_sprite_hit_or_overflow() {
-        let mut ppu = PpuState { status: 0xE0, ..PpuState::default() };
+        let mut ppu = PpuState {
+            status: 0xE0,
+            ..PpuState::default()
+        };
         let mut sink = TraceSink::default();
-        assert_eq!(ppu.read_register(0x2002, 0, 0, TraceConfig::none(), &mut sink), 0xE0);
-        assert_eq!(ppu.read_register(0x2002, 0, 0, TraceConfig::none(), &mut sink), 0x60);
+        assert_eq!(
+            ppu.read_register(0x2002, 0, 0, TraceConfig::none(), &mut sink),
+            0xE0
+        );
+        assert_eq!(
+            ppu.read_register(0x2002, 0, 0, TraceConfig::none(), &mut sink),
+            0x60
+        );
         assert_eq!(ppu.status, 0x60);
     }
 
@@ -892,13 +998,22 @@ mod tests {
         ppu.vram[0x2000] = 7;
         ppu.vram[0x2001] = 9;
         ppu.vram_addr = 0x2000;
-        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0);
-        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 7);
+        assert_eq!(
+            ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink),
+            0
+        );
+        assert_eq!(
+            ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink),
+            7
+        );
         ppu.write_register(0x2007, 3, 0, 0, TraceConfig::none(), &mut sink);
         assert_eq!(ppu.data_read_buffer, 9);
         ppu.vram_addr = 0x2000;
         ppu.ctrl = 4;
-        assert_eq!(ppu.read_register(0x3FFF, 0, 0, TraceConfig::none(), &mut sink), 9);
+        assert_eq!(
+            ppu.read_register(0x3FFF, 0, 0, TraceConfig::none(), &mut sink),
+            9
+        );
         assert_eq!(ppu.vram_addr, 0x2020);
         assert_eq!(ppu.data_read_buffer, 7);
     }
@@ -912,14 +1027,23 @@ mod tests {
         ppu.vram_addr = 0x3F10;
         ppu.io_latch = 0xC0;
         ppu.data_read_buffer = 0x13;
-        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0xEA);
+        assert_eq!(
+            ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink),
+            0xEA
+        );
         assert_eq!(ppu.data_read_buffer, 0x57);
         ppu.vram_addr = 0x2000;
-        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0x57);
+        assert_eq!(
+            ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink),
+            0x57
+        );
         ppu.vram_addr = 0x3F00;
         ppu.io_latch = 0;
         ppu.mask = 1;
-        assert_eq!(ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0x20);
+        assert_eq!(
+            ppu.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink),
+            0x20
+        );
     }
 
     #[test]
@@ -932,7 +1056,10 @@ mod tests {
         let serialized = serde_json::to_string(&ppu).unwrap();
         let mut restored: PpuState = serde_json::from_str(&serialized).unwrap();
         assert_eq!(restored.io_latch, 0xE2);
-        assert_eq!(restored.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink), 0x71);
+        assert_eq!(
+            restored.read_register(0x2007, 0, 0, TraceConfig::none(), &mut sink),
+            0x71
+        );
     }
 
     #[test]
@@ -940,27 +1067,39 @@ mod tests {
     // then move to visible line 100 and require a write-risk event. This test
     // sets the post-read state directly instead of invoking a status read.
     fn reading_status_does_not_make_physical_vblank_vram_writes_unsafe() {
-        let mut ppu = PpuState { mask: 0x1E, scanline: 246, status: 0, ..PpuState::default() };
-        let mut sink=TraceSink::default();
-        ppu.write_register(0x2007,0x42,0,0,TraceConfig::full(),&mut sink);
-        assert!(!sink.events.iter().any(|e| e.severity.as_deref()==Some("warn")));
-        ppu.scanline=100;
-        ppu.write_register(0x2007,0x42,0,0,TraceConfig::full(),&mut sink);
-        assert!(sink.events.iter().any(|e| e.severity.as_deref()==Some("warn")));
+        let mut ppu = PpuState {
+            mask: 0x1E,
+            scanline: 246,
+            status: 0,
+            ..PpuState::default()
+        };
+        let mut sink = TraceSink::default();
+        ppu.write_register(0x2007, 0x42, 0, 0, TraceConfig::full(), &mut sink);
+        assert!(!sink
+            .events
+            .iter()
+            .any(|e| e.severity.as_deref() == Some("warn")));
+        ppu.scanline = 100;
+        ppu.write_register(0x2007, 0x42, 0, 0, TraceConfig::full(), &mut sink);
+        assert!(sink
+            .events
+            .iter()
+            .any(|e| e.severity.as_deref() == Some("warn")));
     }
 
     #[test]
     // Apply the four mixed $2006/$2005 writes and check internal v, fine X and
     // cleared shared write toggles.
     fn scroll_and_address_share_the_write_toggle_for_raster_split() {
-        let mut ppu=PpuState::default();let mut sink=TraceSink::default();
+        let mut ppu = PpuState::default();
+        let mut sink = TraceSink::default();
         // $2006 high, $2005 Y, $2005 X, $2006 low is the raster-scroll
         // sequence. Fine Y bit 2 lives at bit 14 of the internal v register.
-        for (address,value) in [(0x2006,0x08),(0x2005,238),(0x2005,0),(0x2006,0xA0)] {
-            ppu.write_register(address,value,0,0,TraceConfig::none(),&mut sink);
+        for (address, value) in [(0x2006, 0x08), (0x2005, 238), (0x2005, 0), (0x2006, 0xA0)] {
+            ppu.write_register(address, value, 0, 0, TraceConfig::none(), &mut sink);
         }
-        assert_eq!(ppu.vram_addr,0x6BA0);
-        assert_eq!(ppu.fine_x,0);
+        assert_eq!(ppu.vram_addr, 0x6BA0);
+        assert_eq!(ppu.fine_x, 0);
         assert!(!ppu.addr_latch && !ppu.scroll_latch);
     }
 
@@ -968,7 +1107,10 @@ mod tests {
     // Render nine synthetic sprites; verify first-entry priority for an overlap,
     // exclusion of the ninth sprite and the overflow candidate bit.
     fn sprite_evaluation_renders_only_first_eight_and_honors_oam_order() {
-        let mut ppu = PpuState { mask: 0x14, ..PpuState::default() };
+        let mut ppu = PpuState {
+            mask: 0x14,
+            ..PpuState::default()
+        };
         ppu.oam.fill(0xF8);
         ppu.palette[0] = 0x0F;
         ppu.palette[0x11] = 0x21;
@@ -998,7 +1140,11 @@ mod tests {
     // background-table access and sixteen sprite-table byte fetches; this does
     // not execute or validate a mapper IRQ circuit.
     fn empty_scanlines_still_fetch_sprite_table_for_mapper_irq() {
-        let mut ppu = PpuState { mask: 0x1E, ctrl: 0x08, ..PpuState::default() };
+        let mut ppu = PpuState {
+            mask: 0x1E,
+            ctrl: 0x08,
+            ..PpuState::default()
+        };
         ppu.oam.fill(0xF8);
         let mut addresses = Vec::new();
         let mut sink = TraceSink::default();

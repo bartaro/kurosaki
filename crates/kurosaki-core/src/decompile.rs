@@ -766,6 +766,12 @@ fn analyze_function(
         };
         let next = next_address(mapping, address, instruction.bytes.len());
         let flow = flow_kind(&instruction);
+        if instruction.bytes.first() == Some(&0x00) {
+            push_unique(
+                &mut analysis.warnings,
+                "BRK enters an interrupt handler; the handler and its return continuation are not statically reconstructed.".to_string(),
+            );
+        }
         // Warn about a possible bank change without simulating the write or
         // changing subsequent target resolution in this static pass.
         if is_mapper_write(&instruction) {
@@ -1072,6 +1078,15 @@ fn render_artifact(
 ) -> DecompileArtifact {
     let mut disassembly = String::new();
     let mut pseudocode = format!("void {}(void) {{\n", sanitize_identifier(name));
+    if blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| matches!(instruction.bytes.first(), Some(0xA1 | 0xB1)))
+    {
+        pseudocode.push_str(
+            "  /* read16_zp(p): mem[p & $FF] | (mem[(p + 1) & $FF] << 8), little-endian */\n",
+        );
+    }
     for block in blocks {
         let label = label_name(labels, block.start);
         disassembly.push_str(&format!("{}:\n", block.id));
@@ -1120,9 +1135,12 @@ fn pseudocode_line(
                 .map(|address| format!("unresolved_{address:04X}"))
         });
     match instruction.mnemonic.as_str() {
-        "LDA" => format!("a = {operand};"),
-        "LDX" => format!("x = {operand};"),
-        "LDY" => format!("y = {operand};"),
+        "LDA" | "LDX" | "LDY" => load_pseudocode(instruction).unwrap_or_else(|| {
+            format!(
+                "/* {} {}: unsupported load encoding */",
+                instruction.mnemonic, operand
+            )
+        }),
         "STA" => format!("mem[{operand}] = a;"),
         "STX" => format!("mem[{operand}] = x;"),
         "STY" => format!("mem[{operand}] = y;"),
@@ -1145,7 +1163,9 @@ fn pseudocode_line(
             |target| format!("goto {target};"),
         ),
         "RTS" | "RTI" => "return;".to_string(),
-        "BRK" => "interrupt(); return;".to_string(),
+        "BRK" => {
+            "interrupt(); /* interrupt return target is not statically resolved */".to_string()
+        }
         branch if branch_condition(branch).is_some() => target.map_or_else(
             || format!("/* {} */", instruction.text),
             |target| format!("if ({}) goto {target};", branch_condition(branch).unwrap()),
@@ -1158,6 +1178,38 @@ fn pseudocode_line(
             }
         }
     }
+}
+
+/// Derive addressing semantics from decoded bytes, not an ambiguous rendered
+/// assembly operand. This does not infer a runtime value or a mapped ROM bank.
+fn load_pseudocode(instruction: &DecompileInstruction) -> Option<String> {
+    let opcode = *instruction.bytes.first()?;
+    let (register, mnemonic) = match opcode {
+        0xA9 | 0xA5 | 0xB5 | 0xAD | 0xBD | 0xB9 | 0xA1 | 0xB1 => ("a", "LDA"),
+        0xA2 | 0xA6 | 0xB6 | 0xAE | 0xBE => ("x", "LDX"),
+        0xA0 | 0xA4 | 0xB4 | 0xAC | 0xBC => ("y", "LDY"),
+        _ => return None,
+    };
+    if instruction.mnemonic != mnemonic {
+        return None;
+    }
+    let value = match instruction.bytes.as_slice() {
+        [0xA9 | 0xA2 | 0xA0, value] => format!("#${value:02X}"),
+        [0xA4..=0xA6, address] => format!("mem[${address:02X}]"),
+        [0xB5 | 0xB4, address] => format!("mem[(${address:02X} + x) & $FF]"),
+        [0xB6, address] => format!("mem[(${address:02X} + y) & $FF]"),
+        [0xAC..=0xAE, lo, hi] => format!("mem[${:04X}]", u16::from_le_bytes([*lo, *hi])),
+        [0xBD | 0xBC, lo, hi] => {
+            format!("mem[(${:04X} + x) & $FFFF]", u16::from_le_bytes([*lo, *hi]))
+        }
+        [0xB9 | 0xBE, lo, hi] => {
+            format!("mem[(${:04X} + y) & $FFFF]", u16::from_le_bytes([*lo, *hi]))
+        }
+        [0xA1, address] => format!("mem[read16_zp((${address:02X} + x) & $FF)]"),
+        [0xB1, address] => format!("mem[(read16_zp(${address:02X}) + y) & $FFFF]"),
+        _ => return None,
+    };
+    Some(format!("{register} = {value};"))
 }
 
 // Map the eight conditional branches to symbolic status-flag predicates.
@@ -1581,6 +1633,41 @@ mod tests {
     }
 
     #[test]
+    fn brk_reports_unresolved_interrupt_continuation_without_guessing_a_successor() {
+        let report = analyze_cartridge(
+            &synthetic_nrom(&[0x00, 0xEA, 0xA9, 0x7F, 0x60], 0xC000),
+            &DecompileOptions::default(),
+        )
+        .unwrap();
+        let reset = report.functions.iter().find(|f| f.name == "Reset").unwrap();
+        assert!(reset.warnings.iter().any(|warning| {
+            warning.contains("BRK") && warning.contains("not statically reconstructed")
+        }));
+        assert!(reset.artifact.pseudocode_text.contains("interrupt();"));
+        assert!(reset
+            .artifact
+            .pseudocode_text
+            .contains("not statically resolved"));
+        let instructions: Vec<_> = reset.blocks.iter().flat_map(|b| &b.instructions).collect();
+        assert_eq!(instructions.len(), 1);
+        assert_eq!(instructions[0].address.cpu_addr, 0xC000);
+        assert_eq!(instructions[0].bytes, [0x00]);
+        assert!(reset.blocks[0].successors.is_empty());
+    }
+
+    #[test]
+    fn ordinary_return_does_not_report_brk_uncertainty() {
+        let report = analyze_cartridge(
+            &synthetic_nrom(&[0x60], 0xC000),
+            &DecompileOptions::default(),
+        )
+        .unwrap();
+        let reset = report.functions.iter().find(|f| f.name == "Reset").unwrap();
+        assert!(!reset.warnings.iter().any(|warning| warning.contains("BRK")));
+        assert!(reset.artifact.pseudocode_text.contains("return;"));
+    }
+
+    #[test]
     fn restored_current_pc_is_not_a_reset_vector() {
         let prg = vec![0x60; 16 * 1024];
         let mut emulator = Emulator::from_cartridge(synthetic_nrom(&prg, 0xC000)).unwrap();
@@ -1712,6 +1799,89 @@ mod tests {
         assert_eq!(instructions[1].bytes, vec![0xB1, 0x20]);
         assert_eq!(instructions[2].bytes, vec![0xF6, 0x30]);
         assert_eq!(instructions[3].bytes, vec![0x60]);
+    }
+
+    #[test]
+    fn load_pseudocode_distinguishes_all_official_memory_modes_from_immediates() {
+        let cases: &[(u8, &[u8], &str)] = &[
+            (0xA9, &[0xFF], "a = #$FF;"),
+            (0xA5, &[0xFF], "a = mem[$FF];"),
+            (0xB5, &[0xFF], "a = mem[($FF + x) & $FF];"),
+            (0xAD, &[0xFF, 0x34], "a = mem[$34FF];"),
+            (0xBD, &[0xFF, 0x34], "a = mem[($34FF + x) & $FFFF];"),
+            (0xB9, &[0xFF, 0x34], "a = mem[($34FF + y) & $FFFF];"),
+            (0xA1, &[0xFF], "a = mem[read16_zp(($FF + x) & $FF)];"),
+            (0xB1, &[0xFF], "a = mem[(read16_zp($FF) + y) & $FFFF];"),
+            (0xA2, &[0xFF], "x = #$FF;"),
+            (0xA6, &[0xFF], "x = mem[$FF];"),
+            (0xB6, &[0xFF], "x = mem[($FF + y) & $FF];"),
+            (0xAE, &[0xFF, 0x34], "x = mem[$34FF];"),
+            (0xBE, &[0xFF, 0x34], "x = mem[($34FF + y) & $FFFF];"),
+            (0xA0, &[0xFF], "y = #$FF;"),
+            (0xA4, &[0xFF], "y = mem[$FF];"),
+            (0xB4, &[0xFF], "y = mem[($FF + x) & $FF];"),
+            (0xAC, &[0xFF, 0x34], "y = mem[$34FF];"),
+            (0xBC, &[0xFF, 0x34], "y = mem[($34FF + x) & $FFFF];"),
+        ];
+        for (opcode, operands, expected) in cases {
+            let mut bytes = vec![*opcode];
+            bytes.extend_from_slice(operands);
+            bytes.push(0x60);
+            let report = analyze_cartridge(
+                &synthetic_nrom(&bytes, 0xC000),
+                &DecompileOptions::default(),
+            )
+            .unwrap();
+            let reset = report.functions.iter().find(|f| f.name == "Reset").unwrap();
+            let instruction = &reset.blocks[0].instructions[0];
+            assert_eq!(instruction.bytes, &bytes[..bytes.len() - 1]);
+            assert_eq!(pseudocode_line(instruction, &BTreeMap::new()), *expected);
+            assert!(reset.artifact.pseudocode_text.contains(expected));
+            if matches!(opcode, 0xA1 | 0xB1) {
+                assert!(reset.artifact.pseudocode_text.contains("little-endian"));
+            }
+        }
+    }
+
+    #[test]
+    fn load_pseudocode_uses_bytes_and_refuses_mismatched_or_truncated_encodings() {
+        let report = analyze_cartridge(
+            &synthetic_nrom(&[0xA5, 0x36, 0x60], 0xC000),
+            &DecompileOptions::default(),
+        )
+        .unwrap();
+        let mut instruction = report
+            .functions
+            .iter()
+            .find(|f| f.name == "Reset")
+            .unwrap()
+            .blocks[0]
+            .instructions[0]
+            .clone();
+        instruction.operand_text = "$77".into();
+        assert_eq!(load_pseudocode(&instruction).unwrap(), "a = mem[$36];");
+        instruction.mnemonic = "LDX".into();
+        assert!(load_pseudocode(&instruction).is_none());
+        assert!(
+            pseudocode_line(&instruction, &BTreeMap::new()).contains("unsupported load encoding")
+        );
+        instruction.mnemonic = "LDA".into();
+        instruction.bytes.truncate(1);
+        assert!(load_pseudocode(&instruction).is_none());
+    }
+
+    #[test]
+    fn load_analysis_does_not_mutate_live_machine_state_or_disassembly() {
+        let mut emulator =
+            Emulator::from_cartridge(synthetic_nrom(&[0xA5, 0x36, 0xB1, 0xFF, 0x60], 0xC000))
+                .unwrap();
+        emulator.reset(TraceConfig::none());
+        let before = serde_json::to_value(emulator.snapshot()).unwrap();
+        let report = analyze_emulator(&emulator, &DecompileOptions::default()).unwrap();
+        assert_eq!(before, serde_json::to_value(emulator.snapshot()).unwrap());
+        let reset = report.functions.iter().find(|f| f.name == "Reset").unwrap();
+        assert!(reset.artifact.disassembly_text.contains("LDA $36"));
+        assert!(reset.artifact.pseudocode_text.contains("a = mem[$36];"));
     }
 
     #[test]
