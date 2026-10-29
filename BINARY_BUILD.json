@@ -1,8 +1,8 @@
 {
-  "built_on": "2026-10-07",
+  "built_on": "2026-10-29",
   "licensor": "DAISUKE OBA",
   "configuration": "Release",
-  "source_revision_before_packaging": "d13bd6e92531fb5c80a00ccbe6f458bca4411ee0",
+  "source_revision_before_packaging": "320b0b8ff54b5e9e252f6b5a12432aae9266be65",
   "source_inputs": [
     {
       "path": "Cargo.lock",
@@ -18,11 +18,15 @@
     },
     {
       "path": "crates/kurosaki-cli/src/main.rs",
-      "sha256": "fd8d22dcaa0c1846c2e9e0a12e0d2526b10fca97f251cd47f6c784c21d9d9ea5"
+      "sha256": "70fea5397577b04fbee4e976cf0ea9607aa6d4d9b597342d3004b10076bf1ccf"
     },
     {
       "path": "crates/kurosaki-cli/tests/battery_cli.rs",
       "sha256": "50501a54ec6830d66bd156abe3fa2baf105e4886b0383bcfc2eeabf21cab7659"
+    },
+    {
+      "path": "crates/kurosaki-cli/tests/n163_cli.rs",
+      "sha256": "709981e21a28279604746e2fd5f369dd3b8553dab75ac03c16afd65ba1c93530"
     },
     {
       "path": "crates/kurosaki-cli/tests/snapshot_float_roundtrip_cli.rs",
@@ -34,7 +38,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/apu.rs",
-      "sha256": "3e845abad2b51006328276f9615d3d575dab7034d722d2b0bbb77ba5213a1a44"
+      "sha256": "3fa25ef43f9d95b3ae75d41187bb86035f325498dd469ed10155a84bff6eb09b"
     },
     {
       "path": "crates/kurosaki-core/src/battery.rs",
@@ -50,7 +54,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/bus.rs",
-      "sha256": "4178e8817a32d306d25f05957875c540d809240349d5a0a1e8ee50c70792b84d"
+      "sha256": "7b3a6a459d9f32d78f3b3e12a682ca9fc824aaacd4ae23a38f49f8b77c8803ee"
     },
     {
       "path": "crates/kurosaki-core/src/cart.rs",
@@ -62,7 +66,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/decompile.rs",
-      "sha256": "eb57501a62ee587f94e1b9bbf920d29cdf8f4454dfb74f162ee153e13c6a8e94"
+      "sha256": "c32371854cd18edd24d590c309a0e7fce552527e881f2b9a18ca01913d67bd42"
     },
     {
       "path": "crates/kurosaki-core/src/diagnostic_events.rs",
@@ -78,11 +82,11 @@
     },
     {
       "path": "crates/kurosaki-core/src/emulator.rs",
-      "sha256": "5def73cdbb623ea03f42472af36a16ae316ed555351ddc91f4816e9ab2d30a82"
+      "sha256": "ff36f97c03d087855639726faec038f5db0eb01c4c771832f9d02ff0b9d2d3f7"
     },
     {
       "path": "crates/kurosaki-core/src/error.rs",
-      "sha256": "ccae851feb1a9c122fb5a62e82e5f6f87ffa48e046e94cf874b3dfed10d0e0c7"
+      "sha256": "41a453da1d541b6f2554ba95f76933bba8e79c517a420d97a79caa108f2978f9"
     },
     {
       "path": "crates/kurosaki-core/src/fds.rs",
@@ -98,23 +102,35 @@
     },
     {
       "path": "crates/kurosaki-core/src/lib.rs",
-      "sha256": "87e5d9b220ecbd445591c86ce425a5c63ce7bb1aa4de031aef44bbddd423010a"
+      "sha256": "920db3088d6641c96156c520edf4ef6534e932340c02a607dda94b03a982312b"
     },
     {
       "path": "crates/kurosaki-core/src/mapper.rs",
-      "sha256": "ee15f4774d3d8ea2139db86392abc60f2e93a7456e1ee48b074c6a142b01a4d3"
+      "sha256": "d39501fb4c91f7cbdb2d5e0cfcb053fae4c2b3aded9d928642bf29e709e3d815"
     },
     {
       "path": "crates/kurosaki-core/src/mapper_db.rs",
-      "sha256": "893d0c02c0e4e47bea1892c41919f2d6365f18fbbaaa4920b10793fccb27524b"
+      "sha256": "2824ad972faecd7aa057c39684a4e25011428b98b0e5f4e986f4082024cca9e4"
     },
     {
       "path": "crates/kurosaki-core/src/mapper_scaffolds.rs",
-      "sha256": "67c7846b3f8da54a29a7e568928eba05abe64eb6afed4307cd8bc44f21a518b0"
+      "sha256": "9feca7c98464c0a2ac9c6bac039660d2c6bebfa834dd162a0f5cd9c335500097"
+    },
+    {
+      "path": "crates/kurosaki-core/src/namco163.rs",
+      "sha256": "77eea391cce3082c90473321042914948f56cca6cf8f68c3d6e4098d159fc5fb"
+    },
+    {
+      "path": "crates/kurosaki-core/src/nsf.rs",
+      "sha256": "1a017c3626b6448eb62909c1e3787a4bd0d1c9520e872b86331732219006f64c"
+    },
+    {
+      "path": "crates/kurosaki-core/src/nsf/container.rs",
+      "sha256": "49e3dc6e9182130f6dda6515f8b260b3bc1fc7c881a6b64e56fe404ac5f0e38f"
     },
     {
       "path": "crates/kurosaki-core/src/ppu.rs",
-      "sha256": "d249e738b202b0052e3e5b4fa37d6bc237c270d448288782b92c9ccb74094295"
+      "sha256": "63be9930f5d82c0d512ef19c8c3b19a5db4105750e397cc483df04df60308381"
     },
     {
       "path": "crates/kurosaki-core/src/replay.rs",
@@ -126,7 +142,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/screen.rs",
-      "sha256": "0ca2087c45897880af2d080b7ff0dfa836797e30271b42773185c7342665d705"
+      "sha256": "5def68b358e69eb16a6403fa61cc4fb3dafbf7629174f94d9d6a3d08bd25a1c8"
     },
     {
       "path": "crates/kurosaki-core/src/snapshot.rs",
@@ -141,8 +157,24 @@
       "sha256": "1076800286332dd6a5a0e95947c6b8fe7ef5f5c7507f1cb336dc797578973b8d"
     },
     {
+      "path": "crates/kurosaki-core/tests/common/n163_fixture.rs",
+      "sha256": "dc4972a3965a5cc6b03afde35004b2ac6e1db56d400f7907e996ffa64f57f0b1"
+    },
+    {
+      "path": "crates/kurosaki-core/tests/frame_clock.rs",
+      "sha256": "7e8a7d26ece5137e94b192f531dc1af26c4835885a2c64003462ec3bc647850a"
+    },
+    {
       "path": "crates/kurosaki-core/tests/mapper_ciram.rs",
       "sha256": "8cf82643cae3d4e2d810ad96e4b26c63f7805abfd9465a2e83b13aed5a07bbf7"
+    },
+    {
+      "path": "crates/kurosaki-core/tests/n163_audio.rs",
+      "sha256": "6af5601fdb861413dbbff33a993b10b254a9bea3b04bf58bf9aae05ae25af448"
+    },
+    {
+      "path": "crates/kurosaki-core/tests/nsf.rs",
+      "sha256": "f5e2ff00e2c7d43094c0061235cd2bd8f727174a91ff20cc1d2c9891cb114642"
     },
     {
       "path": "crates/kurosaki-core/tests/oam_dma.rs",
@@ -170,7 +202,7 @@
     },
     {
       "path": "crates/kurosaki-py/src/lib.rs",
-      "sha256": "8701bb52f3a94413f5cbaa5e5d80293777b2a1805dc9708e4b76d20a7e6746e0"
+      "sha256": "415ab648cf9c9add702b435b6f8f8b5ab377ec989b076fde04d2e863e7e222a5"
     }
   ],
   "source_inventory_scope": "Public Rust workspace; the CLI dependency closure is built and packaged",
@@ -189,12 +221,12 @@
   "rustflags": "-C target-feature=+crt-static",
   "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
   "cargo_lock_sha256": "0b7e6dda22f25056a6290817f357681c50d8e97d7fdfe726209214221f629fbb",
-  "ci_run": "https://github.com/bartaro/kitaqgb-rust-validation-20261004/actions/runs/37624319393",
+  "ci_run": "https://github.com/bartaro/kitaqgb-rust-validation-20261004/actions/runs/40832126181",
   "validation_commit": "0055cdc3eba618b60710e2e2f3307e6b70b5d1d0",
   "binary": {
     "path": "kurosaki.exe",
-    "bytes": 2547712,
-    "sha256": "0df4e04db24e2918badbf85c345d6910a7adb592a45171798ab6083d6f067fbe",
+    "bytes": 2654208,
+    "sha256": "44cc6744608d34f3a108891e7f4c471e5e9f53466d45d1f94fe44faf13e53884",
     "imported_system_dlls": [
       "kernel32.dll",
       "ntdll.dll",
@@ -225,7 +257,7 @@
         "kurosaki-py"
       ],
       "exit_code": 0,
-      "test_count": 120
+      "test_count": 155
     },
     {
       "name": "clippy",

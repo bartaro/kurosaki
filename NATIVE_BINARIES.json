@@ -1,8 +1,8 @@
 {
   "project": "kurosaki",
   "scope": "CLI executables only; no GUI or Python binary published",
-  "source_commit": "d13bd6e92531fb5c80a00ccbe6f458bca4411ee0",
-  "ci_run": "https://github.com/bartaro/kitaqgb-rust-validation-20261004/actions/runs/37624319393",
+  "source_commit": "320b0b8ff54b5e9e252f6b5a12432aae9266be65",
+  "ci_run": "https://github.com/bartaro/kitaqgb-rust-validation-20261004/actions/runs/40832126181",
   "ci_repository_private": true,
   "validation_commit": "0055cdc3eba618b60710e2e2f3307e6b70b5d1d0",
   "native_ci_passed": true,
@@ -11,55 +11,15 @@
   "dependency_lock_and_existing_license_notices_unchanged": true,
   "records": [
     {
-      "path": "bin/macos-x86_64/kurosaki",
-      "sha256": "5ff406caaad0132fbed6dc8a4953b09d932f74d6bb2510e83ee87416a4b3d105",
-      "bytes": 2951724,
-      "source_commit": "d13bd6e92531fb5c80a00ccbe6f458bca4411ee0",
-      "source_repository": "https://github.com/bartaro/kurosaki",
-      "system": "Darwin",
-      "machine": "x86_64",
-      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
-      "test_count": 120,
-      "native_execution_verified": true,
-      "executable_dependencies": "/Users/runner/work/kitaqgb-rust-validation-20261004/kitaqgb-rust-validation-20261004/projects/kurosaki/target/release/kurosaki:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n",
-      "format_verification": {
-        "format": "Mach-O64 x86_64",
-        "macos_deployment_targets": [
-          "10.12.0"
-        ]
-      },
-      "native_smoke_checks": [
-        {
-          "case": "cli-help",
-          "passed": true
-        },
-        {
-          "case": "battery-first-boot",
-          "passed": true
-        },
-        {
-          "case": "battery-second-boot",
-          "passed": true
-        },
-        {
-          "case": "snapshot-battery-export",
-          "passed": true
-        }
-      ],
-      "release_fraction_cases": 32,
-      "release_current_pc_classification_verified": true,
-      "verified_original_archive_sha256": "11248159b2da03e4af87eda35bae23830ab71cdee03f6a11e632b8c3b36b478c"
-    },
-    {
       "path": "bin/macos-arm64/kurosaki",
-      "sha256": "24833adb98e5bdb75cfc20abb2b8a88e8883834c41c4cdc5474a7098ab170875",
-      "bytes": 2559824,
-      "source_commit": "d13bd6e92531fb5c80a00ccbe6f458bca4411ee0",
+      "sha256": "99efb3ab9f540c5278505560ba5a84b96863647a532751e1710eaf8958ef0e88",
+      "bytes": 2653840,
+      "source_commit": "320b0b8ff54b5e9e252f6b5a12432aae9266be65",
       "source_repository": "https://github.com/bartaro/kurosaki",
       "system": "Darwin",
       "machine": "arm64",
       "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: aarch64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
-      "test_count": 120,
+      "test_count": 155,
       "native_execution_verified": true,
       "executable_dependencies": "/Users/runner/work/kitaqgb-rust-validation-20261004/kitaqgb-rust-validation-20261004/projects/kurosaki/target/release/kurosaki:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1356.0.0)\n",
       "format_verification": {
@@ -88,20 +48,20 @@
       ],
       "release_fraction_cases": 32,
       "release_current_pc_classification_verified": true,
-      "verified_original_archive_sha256": "f94943d62b4910230255fd90dab6a0d97c250ee2593992e7fb8acbed25df6586"
+      "verified_original_archive_sha256": "ad6bc9632ad2d8a5419fcdf0b88bbdc7a58df4d36466fa4a1af00774ba5c7605"
     },
     {
       "path": "bin/linux-x86_64/kurosaki",
-      "sha256": "59aad85e18e108e3ceaaf12e2aefb538e2135885120a5ea5107199c7a25a1fc8",
-      "bytes": 3279472,
-      "source_commit": "d13bd6e92531fb5c80a00ccbe6f458bca4411ee0",
+      "sha256": "2539893cd64d02dc06c4bf75a1f93fd7c8721ef1e5d1f52117cd0b622013fbb4",
+      "bytes": 3397352,
+      "source_commit": "320b0b8ff54b5e9e252f6b5a12432aae9266be65",
       "source_repository": "https://github.com/bartaro/kurosaki",
       "system": "Linux",
       "machine": "x86_64",
       "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-unknown-linux-gnu\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
-      "test_count": 120,
+      "test_count": 155,
       "native_execution_verified": true,
-      "executable_dependencies": "\tlinux-vdso.so.1 (0x00007fb415673000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fb415633000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fb41554a000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fb414e00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fb415675000)\n",
+      "executable_dependencies": "\tlinux-vdso.so.1 (0x00007fdba5151000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fdba5111000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fdba4d17000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fdba4a00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fdba5153000)\n",
       "format_verification": {
         "format": "ELF64 x86_64",
         "glibc_symbol_version_tags": [
@@ -142,7 +102,47 @@
       ],
       "release_fraction_cases": 32,
       "release_current_pc_classification_verified": true,
-      "verified_original_archive_sha256": "087f5e8f80b0b873dd41e45881db6b0270f1f63aa7cd45eeffb06d54eb6f6938"
+      "verified_original_archive_sha256": "af472baacc2dad52490280ea1923118e048c0db8f715d21b04d21dacfdbc7b48"
+    },
+    {
+      "path": "bin/macos-x86_64/kurosaki",
+      "sha256": "c3f6ff1ef9bda63159baefb14b5c098c9cc8a7a360cdb8f5567ba7e50ae4161e",
+      "bytes": 3065756,
+      "source_commit": "320b0b8ff54b5e9e252f6b5a12432aae9266be65",
+      "source_repository": "https://github.com/bartaro/kurosaki",
+      "system": "Darwin",
+      "machine": "x86_64",
+      "toolchain": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-apple-darwin\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
+      "test_count": 155,
+      "native_execution_verified": true,
+      "executable_dependencies": "/Users/runner/work/kitaqgb-rust-validation-20261004/kitaqgb-rust-validation-20261004/projects/kurosaki/target/release/kurosaki:\n\t/usr/lib/libiconv.2.dylib (compatibility version 7.0.0, current version 7.0.0)\n\t/usr/lib/libbz2.1.0.dylib (compatibility version 1.0.0, current version 1.0.8)\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0.0)\n",
+      "format_verification": {
+        "format": "Mach-O64 x86_64",
+        "macos_deployment_targets": [
+          "10.12.0"
+        ]
+      },
+      "native_smoke_checks": [
+        {
+          "case": "cli-help",
+          "passed": true
+        },
+        {
+          "case": "battery-first-boot",
+          "passed": true
+        },
+        {
+          "case": "battery-second-boot",
+          "passed": true
+        },
+        {
+          "case": "snapshot-battery-export",
+          "passed": true
+        }
+      ],
+      "release_fraction_cases": 32,
+      "release_current_pc_classification_verified": true,
+      "verified_original_archive_sha256": "81d7b28880401b3cdc6b7c9b04dc754b3aeb1cb9f3e43bc8f2fae35c4f53b486"
     }
   ]
 }
