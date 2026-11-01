@@ -90,9 +90,9 @@ impl Cartridge {
         Ok(cart)
     }
 
-    // Require an 8 KiB caller-supplied BIOS and parse disk blocks for direct boot.
+    // Require an 8 KiB caller-supplied BIOS and attach the disk read channel.
     // The ROM fingerprint covers disk bytes only, not the BIOS; PRG-ROM holds the
-    // BIOS while the disk object supplies the initial RAM contents.
+    // BIOS while the disk object supplies bytes when the BIOS requests them.
     pub fn from_fds_bytes_with_bios(bytes: &[u8], bios_rom: Vec<u8>) -> Result<Self> {
         if bios_rom.len() != 8 * 1024 {
             return Err(KurosakiError::InvalidRom(format!(
@@ -101,23 +101,9 @@ impl Cartridge {
             )));
         }
         let disk = FdsDiskImage::from_bytes(bytes)?;
-        let fast_boot_pc = disk.fast_boot_pc();
+        let fast_boot_pc = None;
         let mut warnings = disk.warnings.clone();
-        warnings.push(
-            "FDS direct boot preloads boot files into PRG-RAM/CHR-RAM and maps disksys.rom at $E000-$FFFF; cycle-accurate BIOS disk media timing remains future work."
-                .to_string(),
-        );
-        if let Some(pc) = fast_boot_pc {
-            warnings.push(format!(
-                "FDS direct boot reset PC resolved from $DFFC: ${pc:04X}"
-            ));
-        } else {
-            warnings.push(
-                "FDS direct boot could not resolve a reset vector from $DFFC; BIOS reset vector will be used."
-                    .to_string(),
-            );
-        }
-
+        warnings.push("FDS BIOS boot uses read-only media with reconstructed gaps and CRCs; protected/modified disk formats are not supported.".into());
         let mut raw_header = [0u8; 16];
         let n = bytes.len().min(16);
         raw_header[..n].copy_from_slice(&bytes[..n]);

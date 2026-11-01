@@ -219,6 +219,9 @@ enum Commands {
     },
     Run {
         rom: PathBuf,
+        /// Zero-based FDS disk side to insert before BIOS boot.
+        #[arg(long)]
+        fds_side: Option<usize>,
         #[arg(long, default_value_t = 1)]
         frames: u64,
         #[arg(long)]
@@ -787,6 +790,7 @@ fn run_cli() -> Result<()> {
         } => audit_board_command(rom, expected_board, metadata, json),
         Commands::Run {
             rom,
+            fds_side,
             frames,
             max_instructions,
             // The CLI always uses the headless core; this accepted switch does not
@@ -810,6 +814,7 @@ fn run_cli() -> Result<()> {
             pad2,
         } => run_rom(
             rom,
+            fds_side,
             frames,
             max_instructions,
             state_hash,
@@ -1256,6 +1261,7 @@ fn hex_bytes(bytes: &[u8]) -> String {
 // A stopped summary alone is not converted to a CLI error here.
 fn run_rom(
     rom: PathBuf,
+    fds_side: Option<usize>,
     frames: u64,
     max_instructions: Option<u64>,
     state_hash: Option<PathBuf>,
@@ -1276,6 +1282,9 @@ fn run_rom(
     pad2: u8,
 ) -> Result<()> {
     let mut emu = load_emu(&rom)?;
+    if let Some(side) = fds_side {
+        emu.bus.mapper.insert_fds_side(Some(side))?;
+    }
     let wants_diagnostic_trace =
         emit_diagnostics.is_some() || repro_bundle.is_some() || break_on_diagnostic.is_some();
     let trace = if trace_jsonl.is_some() || repro_bundle.is_some() {

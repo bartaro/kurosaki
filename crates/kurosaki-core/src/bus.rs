@@ -342,7 +342,7 @@ impl Bus {
             }
         }
         self.mapper.clock_cpu(cpu_cycles, frame, cycle, cfg, sink);
-        if self.mapper.irq_pending() || self.apu.irq_pending() {
+        if (self.mapper.irq_pending() && !self.mapper.irq_is_level()) || self.apu.irq_pending() {
             self.irq_pending = true;
         }
     }

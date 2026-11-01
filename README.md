@@ -55,6 +55,14 @@ A current stable Rust toolchain. On Windows, install Visual Studio Build Tools w
 .\kurosaki.exe --help
 ```
 
+### FDS media
+
+Standard `.fds` images boot through a user-provided 8192-byte `disksys.rom` BIOS.
+The drive streams block data, gaps and CRC; it supports zero-based `--fds-side`
+selection and resumable media state. Media is read-only. Persistent disk writes,
+protected formats and exact hardware timing are not supported.
+See [FDS media and BIOS setup](docs/fds-media.md).
+
 ### Nametable mapping
 
 AxROM supports lower/upper single-screen selection. FME7 supports vertical, horizontal and both single-screen modes. MMC5 supports all sixteen layouts that use the two CIRAM pages; ExRAM and fill rendering remain unsupported. See the [mode table and executed examples](https://bartaro.github.io/kitaq-docs/en/kitaqfc.html#api-__mirroring_set).
@@ -109,6 +117,13 @@ CLI、トレース、Pythonインターフェースを備えた、NES・ファ�
 .\scripts\build.ps1
 .\kurosaki.exe --help
 ```
+
+### FDSディスク
+
+標準 `.fds` イメージを、ご自身の8192バイトの `disksys.rom` BIOSから起動します。
+ディスクのブロック・ギャップ・CRCを読み出し、`--fds-side`（0始まり）で面を選択できます。
+読み出し途中の状態保存にも対応します。読み取り専用で、永続書き込み・保護形式・厳密な実機タイミングは未対応です。
+詳しくは [FDSの仕様とBIOS設定](docs/fds-media.md) を参照してください。
 
 ### 画面RAMの割り当て
 

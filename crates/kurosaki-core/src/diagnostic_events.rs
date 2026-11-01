@@ -86,6 +86,8 @@ fn map_trace_event(event: &TraceEvent) -> Option<DiagnosticEvent> {
         return None;
     }
     let event_type = match event.kind.as_str() {
+        "fds.crc_error" => "FDS_MEDIA_CRC_ERROR",
+        "fds.write_protected" => "FDS_MEDIA_WRITE_PROTECTED",
         "mapper.mmc1_write_ignored_consecutive" => "FC_MMC1_CONSECUTIVE_WRITE_IGNORED",
         "mapper.mmc1_chr_mode_unsafe" => "FC_MMC1_CHR_MODE_UNSAFE",
         "mapper.mmc1_prg_ram_disabled_access" => "FC_MMC1_PRG_RAM_DISABLED",
@@ -265,6 +267,18 @@ fn max_opt(left: Option<u64>, right: Option<u64>) -> Option<u64> {
 #[cfg(test)]
 mod raster_mapping_tests {
     use super::*;
+    #[test]
+    fn fds_media_violations_are_not_confused_with_normal_disk_traces() {
+        for (kind, code) in [
+            ("fds.crc_error", "FDS_MEDIA_CRC_ERROR"),
+            ("fds.write_protected", "FDS_MEDIA_WRITE_PROTECTED"),
+        ] {
+            let mut event = TraceEvent::new(kind, 2, 100);
+            event.severity = Some("warn".into());
+            assert_eq!(map_trace_event(&event).unwrap().event_type, code);
+        }
+        assert!(map_trace_event(&TraceEvent::new("fds.transfer_irq", 2, 100)).is_none());
+    }
     #[test]
     // Check that generic PPU writes to $2005/$2006 remain register-risk candidates,
     // while $2007 maps to the data-write diagnostic. This test inspects classification

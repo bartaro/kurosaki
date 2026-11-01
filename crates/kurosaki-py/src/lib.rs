@@ -85,6 +85,16 @@ impl Emulator {
         self.inner.battery_ram().map_err(to_py_err)
     }
 
+    /// Insert a zero-based FDS side; None ejects without resetting CPU or RAM.
+    #[pyo3(signature = (side=None))]
+    pub fn insert_fds_side(&mut self, side: Option<usize>) -> PyResult<()> {
+        self.inner
+            .bus
+            .mapper
+            .insert_fds_side(side)
+            .map_err(to_py_err)
+    }
+
     // Advance one core frame step with unsupported opcodes converted to a
     // stopped CPU. Successful return alone does not prove a whole PPU frame
     // was rendered; the software frame counter can advance after an early stop.

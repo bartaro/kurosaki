@@ -64,3 +64,5 @@ pub use snapshot_rebase::{
     TargetPrgAppendDigest, SNAPSHOT_REBASE_CONTRACT_FORMAT, SNAPSHOT_REBASE_REPORT_FORMAT,
 };
 pub use trace::{TraceConfig, TraceEvent, TraceSink};
+
+mod fds_drive;

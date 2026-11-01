@@ -1,0 +1,35 @@
+name: Native FDS validation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native:
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Preserve source bytes
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal --component clippy
+          rustup default 1.93.1
+      - name: Test and execute native CLI
+        env:
+          KUROSAKI_SOURCE_COMMIT: ${{ github.sha }}
+        run: python tools/verify_native_fds.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kurosaki-${{ runner.os }}-${{ runner.arch }}
+          retention-days: 14
+          path: ci-output/kurosaki/*

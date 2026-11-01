@@ -131,12 +131,25 @@ pub trait Mapper: Send {
         _sink: &mut TraceSink,
     ) {
     }
+    /// Insert a zero-based disk side, or eject with None.
+    fn fds_media_status(&self) -> Option<(usize, Option<usize>)> {
+        None
+    }
+    fn insert_fds_side(&mut self, _side: Option<usize>) -> Result<()> {
+        Err(KurosakiError::InvalidRom(
+            "disk-side selection requires FDS media".into(),
+        ))
+    }
     // Default to no mapper interrupt request.
     fn irq_pending(&self) -> bool {
         false
     }
     // Leave state unchanged when no mapper interrupt latch is implemented.
     fn clear_irq(&mut self) {}
+    /// Sources acknowledged only by device registers must not be latched by the bus.
+    fn irq_is_level(&self) -> bool {
+        false
+    }
     /// Advance CPU-clocked expansion sound before the next output sample (or
     /// before returning to the CPU for another register access).
     fn clock_expansion_audio(&mut self, _cpu_cycles: u64) {}
@@ -3210,7 +3223,7 @@ impl Mapper for Mmc3Mapper {
 const CPU_HZ_NTSC: f64 = 1_789_773.0;
 const FDS_ENV_CLOCK_DIVIDER: f64 = 8.0;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FdsEnvelopeUnit {
     control: u8,
     gain: u8,
@@ -3287,18 +3300,12 @@ impl FdsEnvelopeUnit {
 
     // Append control, gain, little-endian fractional divider and gain ceiling
     // in the private audio-state serialization order.
-    fn snapshot_bytes(&self, out: &mut Vec<u8>) {
-        out.push(self.control);
-        out.push(self.gain);
-        out.extend_from_slice(&self.divider.to_le_bytes());
-        out.push(self.max_gain);
-    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct FdsAudioState {
-    wave_ram: [u8; 64],
-    mod_table: [u8; 64],
+    wave_ram: Vec<u8>,
+    mod_table: Vec<u8>,
     volume_reg: u8,
     volume_env_speed: u8,
     freq: u16,
@@ -3327,8 +3334,8 @@ impl Default for FdsAudioState {
         Self {
             // FDS BIOS/game code normally writes a 64-sample waveform before enabling audio.
             // A neutral midpoint avoids a DC pop before the first write.
-            wave_ram: [32; 64],
-            mod_table: [0; 64],
+            wave_ram: vec![32; 64],
+            mod_table: vec![0; 64],
             volume_reg: 0x80,
             volume_env_speed: 0,
             freq: 0,
@@ -3539,37 +3546,17 @@ impl FdsAudioState {
 
     // Append waveform/modulation tables, register flags, fractional phases,
     // envelope state and write count in a fixed private byte layout.
-    fn snapshot_bytes(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.wave_ram);
-        out.extend_from_slice(&self.mod_table);
-        out.push(self.volume_reg);
-        out.push(self.volume_env_speed);
-        out.extend_from_slice(&self.freq.to_le_bytes());
-        out.push(self.master_volume);
-        out.push(self.wave_write_enable as u8);
-        out.push(self.wave_halt as u8);
-        out.push(self.volume_env_halt as u8);
-        out.extend_from_slice(&self.phase.to_le_bytes());
-        out.push(self.mod_reg);
-        out.extend_from_slice(&self.mod_freq.to_le_bytes());
-        out.push(self.mod_halt as u8);
-        out.push(self.mod_env_halt as u8);
-        out.push((self.mod_pos & 0xFF) as u8);
-        out.extend_from_slice(&self.mod_phase.to_le_bytes());
-        out.extend_from_slice(&self.mod_accum.to_le_bytes());
-        self.volume_env.snapshot_bytes(out);
-        self.mod_env.snapshot_bytes(out);
-        out.push(self.env_master_speed);
-        out.extend_from_slice(&self.audio_writes.to_le_bytes());
-    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FdsMapper {
     prg_ram: Vec<u8>,
     chr_ram: Vec<u8>,
     bios_rom: Vec<u8>,
+    #[serde(skip)]
     disk: Option<FdsDiskImage>,
+    drive: crate::fds_drive::FdsDrive,
+    sound_io_enable: bool,
     direct_boot_vectors: bool,
     disk_regs: [u8; 0x20],
     irq_reload: u16,
@@ -3595,6 +3582,8 @@ impl FdsMapper {
             chr_ram: vec![0; 8 * 1024],
             bios_rom: normalize_fds_bios(prg_rom),
             disk: None,
+            drive: crate::fds_drive::FdsDrive::default(),
+            sound_io_enable: true,
             direct_boot_vectors: false,
             disk_regs: [0; 0x20],
             irq_reload: 0,
@@ -3602,7 +3591,7 @@ impl FdsMapper {
             irq_enabled: false,
             irq_repeat: false,
             irq_pending_flag: false,
-            master_io_enable: false,
+            master_io_enable: true,
             disk_motor_on: false,
             transfer_busy: false,
             transfer_cycles_remaining: 0,
@@ -3612,20 +3601,15 @@ impl FdsMapper {
         }
     }
 
-    // Seed RAM from parsed disk boot files and redirect CPU vectors to the
-    // RAM vector copy, then retain the disk. This is a direct-boot path, not
-    // a BIOS-driven simulation of loading each file through disk registers.
+    // Attach reconstructed media; RAM starts empty and CPU vectors use BIOS.
     pub fn new_with_disk(bios_rom: Vec<u8>, disk: FdsDiskImage) -> Self {
         let mut mapper = Self::new(bios_rom, Vec::new());
-        mapper.prg_ram = disk.boot_prg_ram();
-        mapper.chr_ram = disk.boot_chr_ram();
-        mapper.direct_boot_vectors = true;
+        mapper.drive = crate::fds_drive::FdsDrive::load(&disk);
         mapper.disk = Some(disk);
         mapper
     }
-    // Return modeled status/register shadows, clear IRQ on $4030 reads and
-    // advance a synthetic byte counter on $4031 reads. That counter byte is
-    // not fetched from the attached disk image.
+    // Reads acknowledge the corresponding IRQ source. Data remains latched
+    // until the next timed media byte; repeated CPU reads do not advance it.
     fn read_disk_reg(
         &mut self,
         addr: u16,
@@ -3634,28 +3618,25 @@ impl FdsMapper {
         cfg: TraceConfig,
         sink: &mut TraceSink,
     ) -> u8 {
+        if !self.master_io_enable {
+            return 0;
+        }
         let value = match addr {
             0x4030 => {
-                let v = if self.irq_pending_flag { 0x01 } else { 0x00 };
+                // D7 supports polled transfers even with disk IRQ disabled.
+                let v = u8::from(self.irq_pending_flag)
+                    | (u8::from(self.drive.ready) << 7)
+                    | (self.drive.control & 8)
+                    | (u8::from(self.drive.crc_error) << 4);
                 self.irq_pending_flag = false;
+                self.drive.irq = false;
+                self.drive.ready = false;
                 v
             }
-            0x4031 => {
-                self.disk_io_events = self.disk_io_events.saturating_add(1);
-                self.disk_byte_index = self.disk_byte_index.wrapping_add(1);
-                // Return the low byte after incrementing; the first synthetic data
-                // read is one and the sequence wraps every 256 reads.
-                (self.disk_byte_index & 0xFF) as u8
-            }
-            0x4032 => {
-                if self.disk_motor_on {
-                    0x00
-                } else {
-                    0x02
-                }
-            }
-            0x4033 => 0x80,
-            _ => self.disk_regs[(addr as usize - 0x4020) % self.disk_regs.len()],
+            0x4031 => self.drive.read_data(),
+            0x4032 => self.drive.status() | 4, // attached media is read-only
+            0x4033 => self.disk_regs[6] | 0x80,
+            _ => 0,
         };
         if cfg.mapper {
             let mut event = TraceEvent::new("fds.reg_read", frame, cycle);
@@ -3669,9 +3650,7 @@ impl FdsMapper {
         }
         value
     }
-    // Store register shadows and update timer enable/repeat, IO enable and
-    // motor/transfer state. Starting the modeled motor schedules one 150-cycle
-    // transfer; the latched master-IO flag does not gate these accesses.
+    // Gate disk/sound I/O and apply motor, CRC phase, mirroring and IRQ control.
     fn write_disk_reg(
         &mut self,
         addr: u16,
@@ -3681,27 +3660,50 @@ impl FdsMapper {
         cfg: TraceConfig,
         sink: &mut TraceSink,
     ) {
-        let idx = (addr as usize - 0x4020) % self.disk_regs.len();
-        self.disk_regs[idx] = value;
+        if !self.master_io_enable && (0x4024..=0x4026).contains(&addr) {
+            return;
+        }
+        self.disk_regs[(addr - 0x4020) as usize] = value;
         match addr {
             0x4020 => self.irq_reload = (self.irq_reload & 0xFF00) | value as u16,
             0x4021 => self.irq_reload = (self.irq_reload & 0x00FF) | ((value as u16) << 8),
             0x4022 => {
-                self.irq_enabled = value & 0x02 != 0;
-                self.irq_repeat = value & 0x01 != 0;
+                self.irq_enabled = value & 2 != 0 && self.master_io_enable;
+                self.irq_repeat = value & 1 != 0;
                 if self.irq_enabled {
                     self.irq_counter = self.irq_reload;
                 } else {
                     self.irq_pending_flag = false;
                 }
             }
-            0x4023 => self.master_io_enable = value & 0x01 != 0,
-            0x4025 => {
-                self.disk_motor_on = value & 0x01 == 0;
-                self.transfer_busy = self.disk_motor_on;
-                self.transfer_cycles_remaining = if self.disk_motor_on { 150 } else { 0 };
+            0x4023 => {
+                self.master_io_enable = value & 1 != 0;
+                self.sound_io_enable = value & 2 != 0;
+                if !self.master_io_enable {
+                    self.irq_enabled = false;
+                    self.irq_pending_flag = false;
+                    self.drive.irq = false;
+                    self.drive.ready = false;
+                }
             }
+            0x4024 => {
+                self.drive.irq = false;
+                self.drive.ready = false;
+            }
+            0x4025 => self.drive.set_control(value),
             _ => {}
+        }
+        if addr == 0x4024
+            && self.drive.control & 5 == 1
+            && self.drive.inserted.is_some()
+            && cfg.mapper
+        {
+            let mut event = TraceEvent::new("fds.write_protected", frame, cycle);
+            event.addr = Some(addr);
+            event.value = Some(value);
+            event.severity = Some("warn".into());
+            event.message = Some("FDS write rejected: attached media is read-only".into());
+            sink.push(event);
         }
         if cfg.mapper {
             let mut event = TraceEvent::new("fds.reg_write", frame, cycle);
@@ -3725,6 +3727,9 @@ impl FdsMapper {
         cfg: TraceConfig,
         sink: &mut TraceSink,
     ) -> u8 {
+        if !self.sound_io_enable {
+            return 0;
+        }
         let value = self.audio.read(addr);
         if cfg.mapper {
             let mut event = TraceEvent::new("fds.audio_read", frame, cycle);
@@ -3755,6 +3760,9 @@ impl FdsMapper {
         cfg: TraceConfig,
         sink: &mut TraceSink,
     ) {
+        if !self.sound_io_enable {
+            return;
+        }
         self.audio.write(addr, value);
         if cfg.mapper || cfg.apu {
             let mut event = TraceEvent::new("mapper.expansion_audio_write", frame, cycle);
@@ -3782,18 +3790,31 @@ impl FdsMapper {
     }
 }
 impl Mapper for FdsMapper {
-    // Identify the FDS device implementation as mapper 20.
+    fn fds_media_status(&self) -> Option<(usize, Option<usize>)> {
+        Some((self.drive.sides.len(), self.drive.inserted))
+    }
+    fn insert_fds_side(&mut self, side: Option<usize>) -> Result<()> {
+        if side.is_some_and(|n| n >= self.drive.sides.len()) {
+            return Err(KurosakiError::InvalidRom(
+                "FDS side is outside the attached image".into(),
+            ));
+        }
+        self.drive.inserted = side;
+        self.drive.position = 0;
+        self.drive.countdown = 0;
+        self.drive.scanning = false;
+        self.drive.end = true;
+        self.drive.ready = false;
+        self.drive.irq = false;
+        Ok(())
+    }
     fn mapper_id(&self) -> u16 {
         20
     }
-    // Label this implementation as a timing scaffold rather than a complete
-    // disk-controller emulation.
     fn mapper_name(&self) -> &'static str {
-        "FDS timing scaffold"
+        "FDS read-only disk drive"
     }
-    // Route disk/audio registers, 32 KiB RAM and BIOS reads. Direct boot
-    // redirects $FFFA-$FFFF to RAM at $DFFA-$DFFF before the BIOS case;
-    // firmware/RAM retain the trait's absent cartridge-ROM bank label.
+    // Route disk/audio registers, 32 KiB RAM and native BIOS vectors.
     fn read_prg(
         &mut self,
         addr: u16,
@@ -3844,9 +3865,8 @@ impl Mapper for FdsMapper {
         let len = self.chr_ram.len();
         self.chr_ram[(addr as usize) % len] = value;
     }
-    // Advance the timer and one pending transfer by the CPU-cycle chunk.
-    // A timer expiration latches IRQ and optionally reloads; leftover cycles
-    // beyond that expiration are not applied to a new repeat period.
+    // Advance independent timer and disk byte clocks, retaining fractional-byte
+    // time across instruction and DMA batches.
     fn clock_cpu(
         &mut self,
         cpu_cycles: u64,
@@ -3855,64 +3875,67 @@ impl Mapper for FdsMapper {
         cfg: TraceConfig,
         sink: &mut TraceSink,
     ) {
-        // A zero timer counter does not enter this path, even when enabled.
-        // A repeating timer can therefore remain idle after a zero reload.
-        if self.irq_enabled && self.irq_counter > 0 {
-            let dec = cpu_cycles.min(self.irq_counter as u64) as u16;
-            self.irq_counter -= dec;
-            if self.irq_counter == 0 {
-                self.irq_pending_flag = true;
-                if self.irq_repeat {
-                    self.irq_counter = self.irq_reload;
-                } else {
-                    self.irq_enabled = false;
-                }
-                if cfg.mapper || cfg.nmi {
-                    let mut event = TraceEvent::new("fds.irq", frame, cycle);
-                    event.message = Some("FDS timer IRQ pending".to_string());
-                    sink.push(event);
-                }
+        let mut remaining = cpu_cycles;
+        while self.irq_enabled && remaining > 0 {
+            let until = self.irq_counter as u64 + 1;
+            if remaining < until {
+                self.irq_counter -= remaining as u16;
+                break;
+            }
+            remaining -= until;
+            self.irq_pending_flag = true;
+            self.irq_counter = self.irq_reload;
+            if !self.irq_repeat {
+                self.irq_enabled = false;
             }
         }
-        if self.transfer_busy {
-            if cpu_cycles as u32 >= self.transfer_cycles_remaining {
-                // Complete this timing event once without streaming disk data or
-                // scheduling a subsequent byte; another register write must start a transfer.
-                self.transfer_busy = false;
-                self.disk_io_events = self.disk_io_events.saturating_add(1);
-                if cfg.mapper {
-                    let mut event = TraceEvent::new("fds.transfer_tick", frame, cycle);
-                    event.message = Some(format!(
-                        "FDS disk byte transfer completed; events={}",
-                        self.disk_io_events
-                    ));
-                    sink.push(event);
-                }
-            } else {
-                self.transfer_cycles_remaining -= cpu_cycles as u32;
-            }
+        let crc_was_bad = self.drive.crc_error;
+        let transfer_irq_was_pending = self.drive.irq;
+        if self.master_io_enable {
+            self.drive.clock(cpu_cycles);
+        }
+        if !crc_was_bad && self.drive.crc_error && cfg.mapper {
+            let mut event = TraceEvent::new("fds.crc_error", frame, cycle);
+            event.severity = Some("warn".into());
+            event.message = Some("FDS block CRC mismatch".into());
+            sink.push(event);
+        }
+        self.disk_motor_on = self.drive.control & 1 != 0;
+        self.transfer_busy = self.drive.scanning;
+        self.disk_byte_index = self.drive.position as u32;
+        self.disk_io_events = self.drive.reads;
+        if cfg.mapper && self.drive.irq && !transfer_irq_was_pending {
+            let mut event = TraceEvent::new("fds.transfer_irq", frame, cycle);
+            event.value = Some(self.drive.data);
+            sink.push(event);
         }
     }
-    // Expose the pending FDS timer interrupt latch.
     fn irq_pending(&self) -> bool {
-        self.irq_pending_flag
+        self.irq_pending_flag || self.drive.irq
     }
-    // Clear pending IRQ without altering timer enable or counter values.
-    fn clear_irq(&mut self) {
-        self.irq_pending_flag = false;
+    fn irq_is_level(&self) -> bool {
+        true
+    }
+    // CPU acceptance does not acknowledge either level-triggered FDS source.
+    fn clear_irq(&mut self) {}
+    fn nametable_mirroring(&self) -> NametableMirroring {
+        if self.drive.control & 8 != 0 {
+            NametableMirroring::Horizontal
+        } else {
+            NametableMirroring::Vertical
+        }
     }
     // Advance the FDS audio model by one output sample and return its mixer
     // contribution at the requested sample rate.
     fn expansion_audio_sample(&mut self, sample_rate: u32) -> i16 {
         self.audio.sample(sample_rate)
     }
-    // Report timing/audio counters and pending IRQ for this scaffold. The
-    // FDS debug label does not override the trait's four-screen nametable policy.
+    // Report disk/audio counters and the combined pending IRQ level.
     fn debug_state(&self) -> MapperDebugState {
         mapper_debug_state(
             20,
             format!(
-                "FDS timing+audio scaffold motor={} busy={} io_events={} audio_writes={} freq={} vol_env={} mod_freq={} mod_env={} mod_accum={}",
+                "FDS read-channel+audio motor={} busy={} io_events={} audio_writes={} freq={} vol_env={} mod_freq={} mod_env={} mod_accum={}",
                 self.disk_motor_on,
                 self.transfer_busy,
                 self.disk_io_events,
@@ -3930,33 +3953,36 @@ impl Mapper for FdsMapper {
             self.irq_pending(),
         )
     }
-    // Serialize device/audio state and append BIOS, RAM and optional raw
-    // disk bytes for state observation. This type has no restore decoder and
-    // inherits the default restore rejection.
+    // Versioned restorable drive/RAM/audio state; external BIOS identity is checked.
     fn snapshot_bytes(&self) -> Vec<u8> {
-        let mut v = vec![
-            self.irq_enabled as u8,
-            self.irq_repeat as u8,
-            self.irq_pending_flag as u8,
-            self.master_io_enable as u8,
-            self.disk_motor_on as u8,
-            self.transfer_busy as u8,
-        ];
-        v.extend_from_slice(&self.irq_reload.to_le_bytes());
-        v.extend_from_slice(&self.irq_counter.to_le_bytes());
-        v.extend_from_slice(&self.transfer_cycles_remaining.to_le_bytes());
-        v.extend_from_slice(&self.disk_byte_index.to_le_bytes());
-        v.extend_from_slice(&self.disk_io_events.to_le_bytes());
-        v.extend_from_slice(&self.disk_regs);
-        v.push(self.direct_boot_vectors as u8);
-        self.audio.snapshot_bytes(&mut v);
-        v.extend_from_slice(&self.bios_rom);
-        v.extend_from_slice(&self.prg_ram);
-        v.extend_from_slice(&self.chr_ram);
-        if let Some(disk) = &self.disk {
-            v.extend_from_slice(&disk.raw);
+        let mut out = b"KQFDS2\0".to_vec();
+        out.extend(serde_json::to_vec(self).expect("finite FDS state"));
+        out
+    }
+    fn restore_snapshot_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let payload = bytes
+            .strip_prefix(b"KQFDS2\0")
+            .ok_or_else(|| KurosakiError::SnapshotFormat("unsupported legacy FDS state".into()))?;
+        let mut state: Self = serde_json::from_slice(payload)?;
+        if state.bios_rom != self.bios_rom
+            || state.drive.sides != self.drive.sides
+            || state.prg_ram.len() != 32768
+            || state.chr_ram.len() != 8192
+            || state.audio.wave_ram.len() != 64
+            || state.audio.mod_table.len() != 64
+            || state.audio.mod_pos >= 64
+            || state
+                .drive
+                .inserted
+                .is_some_and(|n| n >= state.drive.sides.len())
+        {
+            return Err(KurosakiError::SnapshotFormat(
+                "invalid FDS state or BIOS mismatch".into(),
+            ));
         }
-        v
+        state.disk = self.disk.clone();
+        *self = state;
+        Ok(())
     }
 }
 
