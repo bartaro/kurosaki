@@ -3623,8 +3623,11 @@ impl FdsMapper {
         }
         let value = match addr {
             0x4030 => {
-                // D7 supports polled transfers even with disk IRQ disabled.
+                // D1 is the byte-transfer flag polled by FDS BIOS routines.
+                // Keep D7 for snapshots and older callers that used it.
                 let v = u8::from(self.irq_pending_flag)
+                    | (u8::from(self.drive.ready) << 1)
+                    | (u8::from(self.drive.end && self.drive.inserted.is_some()) << 6)
                     | (u8::from(self.drive.ready) << 7)
                     | (self.drive.control & 8)
                     | (u8::from(self.drive.crc_error) << 4);

@@ -72,6 +72,7 @@ fn disk_reads_stream_real_blocks_and_hold_until_next_byte() {
     write(&mut m, 0x4023, 3);
     write(&mut m, 0x4025, 0xc5);
     clock(&mut m, 50_000 + 3537 * 150 + 150); // sync then block 1
+    assert_eq!(read(&mut m, 0x4030) & 2, 2); // BIOS polls D1 for a transferred byte.
     assert_eq!(read(&mut m, 0x4031), 1);
     assert_eq!(read(&mut m, 0x4031), 1);
     clock(&mut m, 150);

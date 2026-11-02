@@ -19,6 +19,8 @@ pub(crate) struct FdsDrive {
     in_block: bool,
     crc: u16,
     previous_crc: bool,
+    #[serde(default)]
+    crc_bytes_seen: u8,
 }
 
 pub(crate) fn crc_byte(mut crc: u16, value: u8) -> u16 {
@@ -47,6 +49,7 @@ impl Default for FdsDrive {
             in_block: false,
             crc: 0,
             previous_crc: false,
+            crc_bytes_seen: 0,
         }
     }
 }
@@ -99,6 +102,16 @@ impl FdsDrive {
     pub fn set_control(&mut self, value: u8) {
         self.irq = false;
         self.control = value;
+        if value & 0x40 == 0 {
+            // The BIOS can drop and reassert START between two byte clocks.
+            // Re-arm sync detection on the register write, not on a later byte.
+            self.in_block = false;
+            self.crc = 0;
+            self.previous_crc = false;
+            self.crc_bytes_seen = 0;
+            self.crc_error = false;
+            self.ready = false;
+        }
         if value & 1 == 0 {
             self.end = true;
             self.scanning = false;
@@ -139,6 +152,7 @@ impl FdsDrive {
             self.crc = 0;
             self.crc_error = false;
             self.previous_crc = false;
+            self.crc_bytes_seen = 0;
         }
         let mut left = cycles;
         while left >= self.countdown && !self.end {
@@ -167,19 +181,18 @@ impl FdsDrive {
             return;
         }
         let crc_phase = self.control & 0x10 != 0;
-        if !self.previous_crc {
-            self.crc = crc_byte(self.crc, byte);
-        }
         let mut sync = false;
         if self.control & 0x40 == 0 {
             self.in_block = false;
             self.crc = 0;
             self.crc_error = false;
+            self.crc_bytes_seen = 0;
         } else if !self.in_block && byte != 0 {
             self.in_block = true;
             sync = true;
         }
         if self.in_block {
+            self.crc = crc_byte(self.crc, byte);
             self.data = byte;
             // Gap-ending sync is consumed by the drive, not returned as block data.
             self.ready = !sync;
@@ -187,9 +200,51 @@ impl FdsDrive {
                 self.irq = true;
             }
         }
-        if !self.previous_crc && crc_phase {
-            self.crc_error = self.crc != 0;
+        if crc_phase {
+            if !self.previous_crc {
+                self.crc_bytes_seen = 0;
+                self.crc_error = false;
+            }
+            if self.crc_bytes_seen < 2 {
+                self.crc_bytes_seen += 1;
+                if self.crc_bytes_seen == 2 {
+                    self.crc_error = self.crc != 0;
+                }
+            }
         }
         self.previous_crc = crc_phase;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crc_result_waits_for_both_disk_bytes_and_detects_corruption() {
+        let mut side = vec![0; FDS_SIDE_SIZE];
+        side[0] = 1;
+        side[1..15].copy_from_slice(b"*NINTENDO-HVC*");
+        side[56] = 2;
+        let disk = FdsDiskImage::from_bytes(&side).unwrap();
+        for corrupt in [false, true] {
+            let mut drive = FdsDrive::load(&disk);
+            if corrupt {
+                drive.sides[0][3537 + 1 + 56] ^= 1;
+            }
+            drive.set_control(0xc5);
+            drive.clock(50_000 + (3537 + 56) * 150);
+            assert_eq!(drive.position, 3537 + 1 + 56);
+            drive.set_control(0xd5);
+            drive.clock(150);
+            assert!(!drive.crc_error, "CRC result is premature");
+            drive.clock(150);
+            assert_eq!(drive.crc_error, corrupt);
+            drive.set_control(0x25);
+            drive.set_control(0xe5);
+            drive.clock(150);
+            assert!(!drive.in_block);
+            assert!(!drive.ready);
+        }
     }
 }

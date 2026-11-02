@@ -57,7 +57,7 @@ A current stable Rust toolchain. On Windows, install Visual Studio Build Tools w
 
 ### FDS media
 
-Standard `.fds` images boot through a user-provided 8192-byte `disksys.rom` BIOS.
+Standard `.fds` images boot through a user-provided 8192-byte `disksys.rom` or [OpenDiskSysROM](https://github.com/RetrolariumLab/OpenDiskSysROM) `opendisksys.bin` BIOS.
 The drive streams block data, gaps and CRC; it supports zero-based `--fds-side`
 selection and resumable media state. Media is read-only. Persistent disk writes,
 protected formats and exact hardware timing are not supported.
@@ -120,7 +120,7 @@ CLI、トレース、Pythonインターフェースを備えた、NES・ファ�
 
 ### FDSディスク
 
-標準 `.fds` イメージを、ご自身の8192バイトの `disksys.rom` BIOSから起動します。
+標準 `.fds` イメージを、ご自身の8192バイトの `disksys.rom` または [OpenDiskSysROM](https://github.com/RetrolariumLab/OpenDiskSysROM) の `opendisksys.bin` から起動します。
 ディスクのブロック・ギャップ・CRCを読み出し、`--fds-side`（0始まり）で面を選択できます。
 読み出し途中の状態保存にも対応します。読み取り専用で、永続書き込み・保護形式・厳密な実機タイミングは未対応です。
 詳しくは [FDSの仕様とBIOS設定](docs/fds-media.md) を参照してください。

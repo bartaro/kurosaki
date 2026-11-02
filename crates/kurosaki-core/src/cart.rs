@@ -398,15 +398,21 @@ fn load_fds_bios(disk_path: &Path) -> Result<Vec<u8>> {
     if let Ok(path) = std::env::var("KUROSAKI_DISKSYS_ROM") {
         candidates.push(PathBuf::from(path));
     }
+    let mut search_dirs = Vec::new();
     if let Some(parent) = disk_path.parent() {
-        candidates.push(parent.join("disksys.rom"));
+        search_dirs.push(parent.to_path_buf());
     }
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("disksys.rom"));
+        search_dirs.push(cwd);
     }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("disksys.rom"));
+            search_dirs.push(parent.to_path_buf());
+        }
+    }
+    for dir in search_dirs {
+        for name in ["disksys.rom", "opendisksys.bin"] {
+            candidates.push(dir.join(name));
         }
     }
 
@@ -417,7 +423,7 @@ fn load_fds_bios(disk_path: &Path) -> Result<Vec<u8>> {
                 return Ok(bios);
             }
             return Err(KurosakiError::InvalidRom(format!(
-                "found disksys.rom at {}, but it is {} bytes instead of 8192",
+                "found FDS BIOS at {}, but it is {} bytes instead of 8192",
                 candidate.display(),
                 bios.len()
             )));
@@ -425,7 +431,7 @@ fn load_fds_bios(disk_path: &Path) -> Result<Vec<u8>> {
     }
 
     Err(KurosakiError::InvalidRom(
-        "FDS image needs disksys.rom; place it next to the disk image, in the current KUROSAKI directory, or set KUROSAKI_DISKSYS_ROM".to_string(),
+        "FDS image needs an 8192-byte disksys.rom or opendisksys.bin; place it next to the disk image, in the current KUROSAKI directory, or set KUROSAKI_DISKSYS_ROM".to_string(),
     ))
 }
 
