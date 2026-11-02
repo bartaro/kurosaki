@@ -1,8 +1,8 @@
 {
-  "built_on": "2026-11-01",
+  "built_on": "2026-11-02",
   "licensor": "DAISUKE OBA",
   "configuration": "Release",
-  "source_revision_before_packaging": "ad109868d92186caaf0359ed3c10f03aba5cd2ac",
+  "source_revision_before_packaging": "955bb2c4932bbe50c2c62cb134b2966f923a78f0",
   "source_inputs": [
     {
       "path": "Cargo.lock",
@@ -58,7 +58,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/cart.rs",
-      "sha256": "2467fc27828ee6a1e894275d4e53b1757a9b0f00e9226f008e382b1e2a86ec7b"
+      "sha256": "9421ab36d4b6486a186ebe0c8e81b0b01a0c132941952616492a66384043bea3"
     },
     {
       "path": "crates/kurosaki-core/src/cpu.rs",
@@ -94,7 +94,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/fds_drive.rs",
-      "sha256": "d5dec71e05957abc7a86bef05862be3ae1130455e8471d00f18326cc205bdf14"
+      "sha256": "a26c3d3f66c4bb102be150f9da491b1be80d36cc0323766895d9b3e2ad5f4c56"
     },
     {
       "path": "crates/kurosaki-core/src/hash.rs",
@@ -110,7 +110,7 @@
     },
     {
       "path": "crates/kurosaki-core/src/mapper.rs",
-      "sha256": "8ca4750b3046a34bd7577c4b67ec98d6082198778497a3e35c00cf41a5ab6bad"
+      "sha256": "9b95d43054bfdd1ba7e8f1feccffbaf3a3983483e6854997c942490748f1191d"
     },
     {
       "path": "crates/kurosaki-core/src/mapper_db.rs",
@@ -166,7 +166,7 @@
     },
     {
       "path": "crates/kurosaki-core/tests/fds_media.rs",
-      "sha256": "5b93c5877bcb3354c80c6c091f0f9658a37282c14842e8a9bf0bcff383fed22e"
+      "sha256": "3c998511f0a1ca765470fe6ba2d2372c6f51bb62d538e1410b9adc2eec9f8758"
     },
     {
       "path": "crates/kurosaki-core/tests/frame_clock.rs",
@@ -229,12 +229,12 @@
   "rustflags": "-C target-feature=+crt-static",
   "rustc": "rustc 1.93.1 (01f6ddf75 2026-02-11)\nbinary: rustc\ncommit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf\ncommit-date: 2026-02-11\nhost: x86_64-pc-windows-msvc\nrelease: 1.93.1\nLLVM version: 21.1.8\n",
   "cargo_lock_sha256": "0b7e6dda22f25056a6290817f357681c50d8e97d7fdfe726209214221f629fbb",
-  "ci_run": "https://github.com/bartaro/kurosaki/actions/runs/41359316919",
-  "validation_commit": "ad109868d92186caaf0359ed3c10f03aba5cd2ac",
+  "ci_run": "https://github.com/bartaro/kurosaki/actions/runs/41369708162",
+  "validation_commit": "955bb2c4932bbe50c2c62cb134b2966f923a78f0",
   "binary": {
     "path": "kurosaki.exe",
     "bytes": 2731008,
-    "sha256": "e2e48ceb03d766e6e75a0b816f8ce31a7ae631ba0ff2c9682068290c73b017ad",
+    "sha256": "67461dd383d6d68b2961228f03a6182c0edab4a011a7524292dcf5abb92d8e9b",
     "imported_system_dlls": [
       "kernel32.dll",
       "ntdll.dll",
@@ -265,7 +265,7 @@
         "kurosaki-py"
       ],
       "exit_code": 0,
-      "test_count": 160
+      "test_count": 161
     },
     {
       "name": "clippy",
